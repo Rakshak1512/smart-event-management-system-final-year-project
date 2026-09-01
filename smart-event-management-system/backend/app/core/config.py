@@ -70,12 +70,19 @@ class Settings(BaseSettings):
 
     @property
     def cors_origin_list(self) -> List[str]:
-        origins = [o.strip() for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        raw_list = [o.strip().rstrip("/") for o in self.CORS_ORIGINS.split(",") if o.strip()]
+        if "*" in raw_list:
+            return ["*"]
         if self.FRONTEND_URL and self.FRONTEND_URL.strip():
             clean_fe = self.FRONTEND_URL.strip().rstrip("/")
-            if clean_fe not in origins:
-                origins.append(clean_fe)
-        return origins
+            if clean_fe and clean_fe not in raw_list:
+                raw_list.append(clean_fe)
+        # Always include localhost in development for convenience
+        if self.APP_ENV == "development":
+            for default_origin in ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000"]:
+                if default_origin not in raw_list:
+                    raw_list.append(default_origin)
+        return raw_list
 
 
 @lru_cache()
