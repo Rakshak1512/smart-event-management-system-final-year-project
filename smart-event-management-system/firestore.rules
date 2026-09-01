@@ -1,0 +1,85 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == string(userId);
+    }
+
+    function isRole(role) {
+      return isAuthenticated() && request.auth.token.role == role;
+    }
+
+    function isAdmin() {
+      return isRole('admin');
+    }
+
+    function isFaculty() {
+      return isRole('faculty') || isAdmin();
+    }
+
+    // Counters for sequential integer IDs (Admin SDK / backend transaction only)
+    match /_counters/{counterId} {
+      allow read, write: if false; // Only accessible via Firebase Admin SDK backend
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if true; // Public registration
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Events Collection
+    match /events/{eventId} {
+      allow read: if true; // Publicly browsable
+      allow create, update: if isFaculty();
+      allow delete: if isFaculty();
+    }
+
+    // Registrations Collection
+    match /registrations/{registrationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.student_id == request.auth.uid || isFaculty()
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated() && (
+        resource.data.student_id == request.auth.uid || isFaculty()
+      );
+    }
+
+    // Certificates Collection
+    match /certificates/{certificateId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isFaculty();
+    }
+
+    // Notifications Collection
+    match /notifications/{notificationId} {
+      allow read, update: if isAuthenticated() && resource.data.user_id == request.auth.uid;
+      allow create: if isAuthenticated();
+      allow delete: if isAuthenticated() && (resource.data.user_id == request.auth.uid || isAdmin());
+    }
+
+    // Password Resets & Email Verifications (Backend managed)
+    match /password_resets/{resetId} {
+      allow read, write: if false; // Managed securely by Backend Admin SDK
+    }
+
+    match /email_verifications/{verificationId} {
+      allow read, write: if false; // Managed securely by Backend Admin SDK
+    }
+
+    // Audit Logs
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false; // Appended only by Backend Admin SDK
+    }
+  }
+}

@@ -1,0 +1,550 @@
+"""
+SMTP Email Service for transactional emails via Gmail / Standard SMTP.
+
+Configured via environment variables:
+- SMTP_HOST
+- SMTP_PORT
+- SMTP_USER
+- SMTP_PASSWORD
+- SMTP_FROM_NAME
+- SMTP_FROM_EMAIL
+- SMTP_USE_TLS
+"""
+import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.utils import formataddr
+from typing import Optional, Tuple
+
+from app.core.config import settings
+
+logger = logging.getLogger("app.email")
+
+
+def _mask_email(email: str) -> str:
+    """Mask email for safe logging without exposing personal data (e.g. r***k@gmail.com)."""
+    if not email or "@" not in email:
+        return "***"
+    local_part, domain = email.split("@", 1)
+    if len(local_part) <= 2:
+        masked_local = local_part[0] + "*"
+    else:
+        masked_local = local_part[0] + "*" * (len(local_part) - 2) + local_part[-1]
+    return f"{masked_local}@{domain}"
+
+
+def send_email_detailed(
+    to_email: str, subject: str, html_body: str, text_body: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Send an email via SMTP and return (success, message_or_error_detail).
+    
+    Safe logging:
+    - Never logs SMTP passwords or sensitive credentials.
+    - Masks recipient email addresses in logs.
+    """
+    to_addr = (to_email or "").strip()
+    if not to_addr:
+        return False, "Recipient email address is required."
+
+    masked_to = _mask_email(to_addr)
+
+    host = settings.SMTP_HOST.strip() if settings.SMTP_HOST else "smtp.gmail.com"
+    port = settings.SMTP_PORT or 587
+    user = settings.SMTP_USER.strip() if settings.SMTP_USER else ""
+    # Strip any internal spaces from 16-character Google App Passwords
+    password = (settings.SMTP_PASSWORD or "").strip().replace(" ", "")
+    from_name = (settings.SMTP_FROM_NAME or settings.APP_NAME or "EventSphere").strip()
+    from_email = (settings.SMTP_FROM_EMAIL or user or "smart.event.system2026@gmail.com").strip()
+
+    if not host or not user or not password:
+        err_msg = "SMTP credentials not configured (SMTP_HOST, SMTP_USER, or SMTP_PASSWORD is empty)."
+        logger.error("SMTP delivery failed: %s (To=%s)", err_msg, masked_to)
+        return False, "Unable to send verification email. Please check the email service configuration."
+
+    sender_header = formataddr((from_name, from_email))
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = sender_header
+    msg["To"] = to_addr
+
+    if text_body:
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    if html_body:
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    logger.info("SMTP request started for %s (Subject: %s, Sender: %s)", masked_to, subject, from_email)
+
+    try:
+        if port == 465:
+            with smtplib.SMTP_SSL(host, port, timeout=15) as server:
+                server.login(user, password)
+                server.sendmail(from_email, [to_addr], msg.as_string())
+        else:
+            with smtplib.SMTP(host, port, timeout=15) as server:
+                server.ehlo()
+                if settings.SMTP_USE_TLS:
+                    server.starttls()
+                    server.ehlo()
+                server.login(user, password)
+                server.sendmail(from_email, [to_addr], msg.as_string())
+
+        logger.info("SMTP email sent successfully to %s", masked_to)
+        return True, "Email delivered successfully"
+    except smtplib.SMTPAuthenticationError as e:
+        logger.error("SMTP authentication failed for %s: (Code: %s)", masked_to, getattr(e, 'smtp_code', 535))
+        return False, "Unable to send verification email. Please check the email service configuration."
+    except smtplib.SMTPException as e:
+        logger.error("SMTP error for %s: %s", masked_to, str(e))
+        return False, "Unable to send verification email. Please check the email service configuration."
+    except Exception as e:
+        logger.error("SMTP network exception for %s: %s", masked_to, str(e))
+        return False, "Unable to send verification email. Please check the email service configuration."
+
+
+def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
+    """Send an email and return boolean status."""
+    success, _ = send_email_detailed(to_email, subject, html_body, text_body)
+    return success
+
+
+def send_otp_email(
+    to_email: str,
+    otp: str,
+    name: Optional[str] = None,
+    expiry_minutes: Optional[int] = None,
+) -> Tuple[bool, str]:
+    """
+    Send a 6-digit OTP verification email via SMTP.
+    Returns (success: bool, message_or_error: str).
+    """
+    exp_mins = expiry_minutes or settings.OTP_EXPIRE_MINUTES or 10
+    user_name = name or "User"
+    subject = f"{settings.APP_NAME} - Your OTP Verification Code"
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <!-- Header -->
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); padding: 32px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff; letter-spacing: -0.5px;">
+        Event<span style="color: #cbd5e1;">Sphere</span>
+      </h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
+    </div>
+    
+    <!-- Body -->
+    <div style="padding: 32px 28px;">
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc;">
+        Email Verification
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Hello <strong style="color: #f1f5f9;">{user_name}</strong>,<br>
+        Thank you for joining {settings.APP_NAME}. Please use the verification code below to confirm your email address:
+      </p>
+      
+      <!-- OTP Box -->
+      <div style="background: rgba(99, 102, 241, 0.1); border: 1.5px dashed #818cf8; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
+        <span style="font-size: 36px; font-weight: 800; letter-spacing: 10px; color: #a5b4fc; font-family: 'Courier New', Courier, monospace; display: inline-block; padding-left: 10px;">
+          {otp}
+        </span>
+      </div>
+      
+      <!-- Expiry Notice -->
+      <div style="background: #0f172a; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; display: flex; align-items: center;">
+        <p style="margin: 0; font-size: 13px; color: #cbd5e1;">
+          ⏱️ This OTP code expires in <strong>{exp_mins} minutes</strong>.
+        </p>
+      </div>
+      
+      <!-- Security Warning -->
+      <p style="margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #f43f5e;">
+        ⚠️ Security Warning:
+      </p>
+      <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #64748b;">
+        Do not share this code with anyone. EventSphere staff will never ask for your verification code.
+      </p>
+    </div>
+    
+    <!-- Footer -->
+    <div style="background: #0f172a; padding: 18px 24px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        &copy; 2026 {settings.APP_NAME}. All rights reserved.<br>
+        If you did not request this code, you can safely ignore this email.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    text_content = (
+        f"Your {settings.APP_NAME} verification code is:\n\n"
+        f"{otp}\n\n"
+        f"This OTP expires in {exp_mins} minutes.\n\n"
+        f"Do not share this code with anyone."
+    )
+
+    return send_email_detailed(to_email, subject, html_content, text_content)
+
+
+def send_verification_email(to_email: str, name: str, otp_code: str) -> bool:
+    """Alias for send_otp_email for backward compatibility."""
+    success, _ = send_otp_email(to_email, otp_code, name)
+    return success
+
+
+def send_password_reset_email(to_email: str, name: str, otp_code: str) -> bool:
+    """Send password verification 6-digit OTP email via SMTP (Email OTP only, no links)."""
+    exp_mins = settings.OTP_EXPIRE_MINUTES or 10
+    user_name = name or "User"
+    subject = f"{settings.APP_NAME} - Password Verification OTP"
+
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); padding: 28px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 800; color: #ffffff;">{settings.APP_NAME}</h1>
+      <p style="margin: 4px 0 0; color: rgba(255,255,255,0.9); font-size: 13px;">Smart Event Management System</p>
+    </div>
+    <div style="padding: 30px 24px;">
+      <h2 style="margin: 0 0 12px; font-size: 19px; color: #f8fafc;">EventSphere Password Verification</h2>
+      <p style="margin: 0 0 18px; font-size: 14px; color: #94a3b8;">
+        Hi {user_name}, we received a request to change your password. Your password-change OTP is:
+      </p>
+      <div style="background: rgba(99, 102, 241, 0.1); border: 1.5px dashed #818cf8; border-radius: 12px; padding: 18px; text-align: center; margin: 20px 0;">
+        <span style="font-size: 32px; font-weight: 800; letter-spacing: 8px; color: #a5b4fc; font-family: monospace;">
+          {otp_code}
+        </span>
+      </div>
+      <p style="margin: 0 0 12px; font-size: 13px; color: #cbd5e1;">⏱️ This OTP expires in {exp_mins} minutes.</p>
+      <p style="margin: 0; font-size: 12px; color: #64748b;">Do not share this OTP with anyone. If you did not request a password change, you can safely ignore this email.</p>
+    </div>
+  </div>
+</body>
+</html>"""
+
+    text_content = (
+        f"EventSphere Password Verification\n\n"
+        f"Your password-change OTP is:\n\n"
+        f"{otp_code}\n\n"
+        f"This OTP expires in {exp_mins} minutes.\n\n"
+        f"Do not share this OTP with anyone."
+    )
+
+    return send_email(to_email, subject, html_content, text_content)
+
+
+def send_registration_confirmation_email(
+    to_email: str,
+    name: str,
+    event_title: str,
+    ticket_code: str,
+    event_date: Optional[str] = None,
+    event_time: Optional[str] = None,
+    venue: Optional[str] = None,
+) -> bool:
+    """Send detailed event registration confirmation email via SMTP."""
+    subject = f"Registration Confirmed: {event_title}"
+    date_val = event_date or "To be announced"
+    time_val = event_time or "To be announced"
+    venue_val = venue or "Campus Venue"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden;">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 28px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 24px; font-weight: 800; color: #ffffff;">🎉 Registration Confirmed</h1>
+      <p style="margin: 4px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">{settings.APP_NAME}</p>
+    </div>
+    <div style="padding: 28px 24px;">
+      <p style="margin: 0 0 16px; font-size: 15px; color: #f1f5f9;">Hello <strong>{name}</strong>,</p>
+      <p style="margin: 0 0 20px; font-size: 14px; color: #94a3b8; line-height: 1.5;">
+        You have successfully registered for <strong>{event_title}</strong>. Here are your event details:
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px; margin-bottom: 20px; border: 1px solid #334155;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr><td style="padding: 6px 0; color: #94a3b8; width: 110px;">Event:</td><td style="padding: 6px 0; color: #f8fafc; font-weight: 600;">{event_title}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Status:</td><td style="padding: 6px 0; color: #34d399; font-weight: 700;">Confirmed</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Ticket Code:</td><td style="padding: 6px 0; color: #a5b4fc; font-family: monospace; font-weight: 700; font-size: 15px;">#{ticket_code}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Date:</td><td style="padding: 6px 0; color: #f8fafc;">{date_val}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Time:</td><td style="padding: 6px 0; color: #f8fafc;">{time_val}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Venue:</td><td style="padding: 6px 0; color: #f8fafc;">{venue_val}</td></tr>
+        </table>
+      </div>
+      <p style="margin: 0; font-size: 12.5px; color: #cbd5e1; line-height: 1.5;">
+        📌 <strong>Instructions:</strong> Please present your QR ticket or downloaded registration slip at the entrance for attendance verification.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    text = f"Registration Confirmed for {event_title}\nTicket: #{ticket_code}\nDate: {date_val}\nTime: {time_val}\nVenue: {venue_val}"
+def send_registration_approved_email(
+    to_email: str,
+    name: str,
+    event_title: str,
+    registration_number: Optional[str] = None,
+    event_date: Optional[str] = None,
+    venue: Optional[str] = None,
+    ticket_code: Optional[str] = None,
+) -> bool:
+    """Send official registration approval notification email via SMTP."""
+    subject = f"Registration Approved: {event_title}"
+    date_val = event_date or "Campus Event Date"
+    venue_val = venue or "Campus Venue"
+    reg_val = registration_number or "N/A"
+    ticket_val = ticket_code or "N/A"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 18px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.35);">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 28px 24px; text-align: center;">
+      <h2 style="margin: 0 0 6px; color: #ffffff; font-size: 22px;">🎉 Registration Approved!</h2>
+      <p style="margin: 0; color: rgba(255,255,255,0.9); font-size: 14px;">EventSphere Smart Event System</p>
+    </div>
+    <div style="padding: 26px;">
+      <p style="margin: 0 0 16px; font-size: 15px; color: #f1f5f9;">Hello <strong>{name}</strong>,</p>
+      <p style="margin: 0 0 18px; font-size: 14px; color: #cbd5e1; line-height: 1.55;">
+        Great news! Your registration for <strong>{event_title}</strong> has been officially approved by the faculty coordinator.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px; margin-bottom: 20px; border: 1px solid #334155;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr><td style="padding: 6px 0; color: #94a3b8; width: 120px;">Event:</td><td style="padding: 6px 0; color: #f8fafc; font-weight: 600;">{event_title}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Status:</td><td style="padding: 6px 0; color: #34d399; font-weight: 700;">Approved</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Register No:</td><td style="padding: 6px 0; color: #a5b4fc; font-family: monospace; font-weight: 700;">{reg_val}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Ticket / Pass:</td><td style="padding: 6px 0; color: #a5b4fc; font-family: monospace; font-weight: 700; font-size: 14px;">#{ticket_val}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Date:</td><td style="padding: 6px 0; color: #f8fafc;">{date_val}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Venue:</td><td style="padding: 6px 0; color: #f8fafc;">{venue_val}</td></tr>
+        </table>
+      </div>
+      <p style="margin: 0; font-size: 12.5px; color: #94a3b8; line-height: 1.5;">
+        📌 <strong>Next Step:</strong> You can view your QR attendance ticket inside the EventSphere student portal and have it scanned at the entrance during the event.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    text = f"Registration Approved for {event_title}\nRegister No: {reg_val}\nTicket: #{ticket_val}\nDate: {date_val}\nVenue: {venue_val}"
+    return send_email(to_email, subject, html, text)
+
+
+def send_certificate_uploaded_email(to_email: str, name: str, cert_title: str) -> bool:
+    """Send certificate notification email via SMTP."""
+    subject = f"New Certificate Available: {cert_title}"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #a5b4fc; margin-top: 0;">🎓 Certificate Issued</h2>
+    <p style="color: #cbd5e1; font-size: 14.5px;">Hi <strong>{name}</strong>, a new certificate titled <strong>{cert_title}</strong> has been uploaded to your account.</p>
+    <p style="color: #94a3b8; font-size: 13px;">Log in to EventSphere to preview and download your certificate.</p>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"New Certificate: {cert_title}")
+
+
+def send_registration_cancellation_email(
+    to_email: str,
+    name: str,
+    event_title: str,
+    reason: Optional[str] = None,
+) -> bool:
+    """Send event cancellation notification email via SMTP."""
+    subject = f"Registration Cancelled: {event_title}"
+    reason_text = reason or "Cancelled by event coordinator."
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden;">
+    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 24px; text-align: center;">
+      <h2 style="margin: 0; color: #ffffff;">Registration Update</h2>
+    </div>
+    <div style="padding: 24px;">
+      <p style="margin: 0 0 14px; font-size: 14.5px; color: #f1f5f9;">Hello <strong>{name}</strong>,</p>
+      <p style="margin: 0 0 16px; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+        Your registration for <strong>{event_title}</strong> has been cancelled.
+      </p>
+      <div style="background: #0f172a; padding: 14px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #334155;">
+        <p style="margin: 0; font-size: 13px; color: #fca5a5;"><strong>Status:</strong> Cancelled</p>
+        <p style="margin: 6px 0 0; font-size: 12.5px; color: #94a3b8;"><strong>Reason/Note:</strong> {reason_text}</p>
+      </div>
+      <p style="margin: 0; font-size: 12.5px; color: #94a3b8;">
+        If you have questions, please contact the event organizer or department faculty.
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Registration Cancelled for {event_title}. {reason_text}")
+
+
+def send_attendance_confirmed_student_email(
+    to_email: str,
+    student_name: str,
+    event_title: str,
+    event_date: str,
+    attendance_time: str,
+    volunteer_name: str,
+) -> bool:
+    subject = f"Attendance Confirmed — {event_title}"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden;">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 24px; text-align: center;">
+      <h2 style="margin: 0; color: #ffffff;">✓ Attendance Confirmed</h2>
+    </div>
+    <div style="padding: 24px;">
+      <p style="margin: 0 0 14px; font-size: 14.5px; color: #f1f5f9;">Hello <strong>{student_name}</strong>,</p>
+      <p style="margin: 0 0 16px; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+        Your attendance has been successfully confirmed for:
+      </p>
+      <div style="background: #0f172a; padding: 16px; border-radius: 10px; margin-bottom: 16px; border: 1px solid #334155;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr><td style="padding: 5px 0; color: #94a3b8; width: 120px;">Event:</td><td style="padding: 5px 0; color: #f8fafc; font-weight: 600;">{event_title}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Date:</td><td style="padding: 5px 0; color: #f8fafc;">{event_date}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Attendance Time:</td><td style="padding: 5px 0; color: #34d399; font-weight: 600;">{attendance_time}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Confirmed by:</td><td style="padding: 5px 0; color: #a5b4fc;">{volunteer_name}</td></tr>
+        </table>
+      </div>
+      <p style="margin: 0; font-size: 12.5px; color: #94a3b8;">
+        Thank you,<br>EventSphere Team
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    text = f"Hello {student_name},\n\nYour attendance has been successfully confirmed for:\nEvent: {event_title}\nDate: {event_date}\nAttendance Time: {attendance_time}\nConfirmed by: {volunteer_name}\n\nThank you,\nEventSphere"
+    return send_email(to_email, subject, html, text)
+
+
+def send_attendance_confirmed_faculty_email(
+    to_email: str,
+    faculty_name: str,
+    student_name: str,
+    registration_number: str,
+    event_title: str,
+    attendance_time: str,
+    volunteer_name: str,
+) -> bool:
+    subject = f"Student Attendance Confirmed — {event_title}"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden;">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); padding: 24px; text-align: center;">
+      <h2 style="margin: 0; color: #ffffff;">Attendee Check-in Notification</h2>
+    </div>
+    <div style="padding: 24px;">
+      <p style="margin: 0 0 14px; font-size: 14.5px; color: #f1f5f9;">Dear <strong>{faculty_name}</strong>,</p>
+      <p style="margin: 0 0 16px; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+        A student has checked in for your event:
+      </p>
+      <div style="background: #0f172a; padding: 16px; border-radius: 10px; margin-bottom: 16px; border: 1px solid #334155;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr><td style="padding: 5px 0; color: #94a3b8; width: 120px;">Student:</td><td style="padding: 5px 0; color: #f8fafc; font-weight: 600;">{student_name}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Registration No:</td><td style="padding: 5px 0; color: #f8fafc;">{registration_number}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Event:</td><td style="padding: 5px 0; color: #f8fafc;">{event_title}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Check-in Time:</td><td style="padding: 5px 0; color: #34d399; font-weight: 600;">{attendance_time}</td></tr>
+          <tr><td style="padding: 5px 0; color: #94a3b8;">Checked in by:</td><td style="padding: 5px 0; color: #a5b4fc;">{volunteer_name}</td></tr>
+        </table>
+      </div>
+      <p style="margin: 0; font-size: 12.5px; color: #94a3b8;">
+        EventSphere Automated System
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    text = f"Student Attendance Confirmed\nStudent: {student_name} ({registration_number})\nEvent: {event_title}\nTime: {attendance_time}\nVolunteer: {volunteer_name}"
+    return send_email(to_email, subject, html, text)
+
+
+def send_faculty_work_assigned_email(
+    to_email: str,
+    faculty_name: str,
+    task_title: str,
+    description: str,
+    priority: str = "Medium",
+    deadline: Optional[str] = None,
+    event_title: Optional[str] = None,
+    assigned_by_name: str = "Administrator / Principal",
+    portal_link: Optional[str] = None,
+) -> bool:
+    """
+    Dispatches task assignment notification email from Admin to Faculty member.
+    Fails gracefully if SMTP is not configured.
+    """
+    subject = f"New Work Assignment: {task_title}"
+    link = portal_link or f"{settings.FRONTEND_URL}/faculty/dashboard"
+    deadline_str = deadline or "As soon as possible"
+    event_row = f'<tr><td style="padding: 6px 0; color: #94a3b8; width: 120px;">Associated Event:</td><td style="padding: 6px 0; color: #f8fafc; font-weight: 600;">{event_title}</td></tr>' if event_title else ""
+
+    p_color = "#38bdf8" if priority.lower() == "low" else "#f59e0b" if priority.lower() == "medium" else "#ef4444"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 540px; margin: 0 auto; background: #1e293b; border-radius: 18px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); padding: 28px 24px; text-align: center;">
+      <h2 style="margin: 0; color: #ffffff; font-size: 20px;">Faculty Work Assignment</h2>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.85); font-size: 13px;">Assigned by {assigned_by_name}</p>
+    </div>
+    <div style="padding: 26px 24px;">
+      <p style="margin: 0 0 14px; font-size: 15px; color: #f1f5f9;">Dear <strong>Prof. {faculty_name}</strong>,</p>
+      <p style="margin: 0 0 18px; font-size: 14px; color: #cbd5e1; line-height: 1.5;">
+        You have been assigned a new administrative task by <strong>{assigned_by_name}</strong>. Please review the assignment details below:
+      </p>
+
+      <div style="background: #0f172a; padding: 18px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #334155;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr><td style="padding: 6px 0; color: #94a3b8; width: 120px;">Task Title:</td><td style="padding: 6px 0; color: #f8fafc; font-weight: 700;">{task_title}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8; vertical-align: top;">Description:</td><td style="padding: 6px 0; color: #cbd5e1; line-height: 1.4;">{description}</td></tr>
+          {event_row}
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Priority:</td><td style="padding: 6px 0; color: {p_color}; font-weight: 700; text-transform: uppercase;">{priority}</td></tr>
+          <tr><td style="padding: 6px 0; color: #94a3b8;">Deadline:</td><td style="padding: 6px 0; color: #34d399; font-weight: 600;">{deadline_str}</td></tr>
+        </table>
+      </div>
+
+      <div style="text-align: center; margin-bottom: 22px;">
+        <a href="{link}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-size: 14px; font-weight: 600; box-shadow: 0 4px 14px rgba(139, 92, 246, 0.4);">
+          Open Faculty Dashboard
+        </a>
+      </div>
+
+      <p style="margin: 0; font-size: 12px; color: #94a3b8; text-align: center;">
+        EventSphere Academic & Event Administration System
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    text = f"Dear Prof. {faculty_name},\n\nYou have been assigned a new task: {task_title}\n\nDescription: {description}\nPriority: {priority}\nDeadline: {deadline_str}\nAssigned by: {assigned_by_name}\n\nView on Portal: {link}"
+    return send_email(to_email, subject, html, text)
+
+

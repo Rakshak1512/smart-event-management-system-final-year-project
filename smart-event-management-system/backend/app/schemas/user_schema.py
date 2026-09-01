@@ -1,0 +1,166 @@
+import re
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
+
+from app.models.user import RoleEnum
+
+
+def validate_password_complexity(v: str) -> str:
+    if not v:
+        raise ValueError("Password is required.")
+    if len(v) < 8:
+        raise ValueError("Password must be at least 8 characters.")
+    return v
+
+
+class UserCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=150)
+    registration_number: Optional[str] = Field(None, max_length=50)
+    phone: Optional[str] = Field(None, max_length=20)
+    department: Optional[str] = Field(None, max_length=100)
+    semester: Optional[str] = Field(None, max_length=20)
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    confirm_password: str
+    role: RoleEnum = RoleEnum.student
+
+    @field_validator("registration_number", "phone", "department", "semester", mode="before")
+    @classmethod
+    def normalize_empty_strings(cls, v):
+        if isinstance(v, str):
+            v = v.strip()
+            return v if v else None
+        return v
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_rules(cls, v):
+        return validate_password_complexity(v)
+
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if "password" in info.data and v != info.data["password"]:
+            raise ValueError("Passwords do not match")
+        return v
+
+    @model_validator(mode="after")
+    def validate_student_reg_number(self):
+        if self.role == RoleEnum.student and not self.registration_number:
+            raise ValueError("Registration number is required for students")
+        return self
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+    role: RoleEnum
+    remember_me: bool = False
+
+
+class EmailSendOtpRequest(BaseModel):
+    email: EmailStr
+    role: RoleEnum = RoleEnum.student
+
+
+class EmailVerifyOtpRequest(BaseModel):
+    email: EmailStr
+    otp_code: str = Field(..., min_length=4, max_length=10)
+    role: RoleEnum = RoleEnum.student
+    remember_me: bool = False
+
+
+class UserOut(BaseModel):
+    id: int
+    name: str
+    registration_number: Optional[str] = None
+    phone: Optional[str] = None
+    department: Optional[str] = None
+    semester: Optional[str] = None
+    email: EmailStr
+    role: RoleEnum
+    profile_picture: Optional[str] = None
+    is_email_verified: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=2, max_length=150)
+    phone: Optional[str] = Field(None, max_length=20)
+    department: Optional[str] = Field(None, max_length=100)
+    semester: Optional[str] = Field(None, max_length=20)
+
+
+class ChangePassword(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_pwd(cls, v):
+        return validate_password_complexity(v)
+
+    @field_validator("confirm_new_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if "new_password" in info.data and v != info.data["new_password"]:
+            raise ValueError("Passwords do not match")
+        return v
+
+
+class EmailUpdateRequest(BaseModel):
+    new_email: EmailStr
+    password: str
+
+
+class Token(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class VerifyEmailRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
+
+
+class ResendOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyResetOtpRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    otp_code: str
+    new_password: str = Field(..., min_length=8, max_length=128)
+    confirm_new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_reset_pwd(cls, v):
+        return validate_password_complexity(v)
+
+    @field_validator("confirm_new_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if "new_password" in info.data and v != info.data["new_password"]:
+            raise ValueError("Passwords do not match")
+        return v
