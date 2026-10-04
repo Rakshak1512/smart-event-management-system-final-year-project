@@ -18,6 +18,7 @@ def validate_password_complexity(v: str) -> str:
 class UserCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=150)
     registration_number: Optional[str] = Field(None, max_length=50)
+    admin_id: Optional[str] = Field(None, max_length=50)
     phone: Optional[str] = Field(None, max_length=20)
     department: Optional[str] = Field(None, max_length=100)
     semester: Optional[str] = Field(None, max_length=20)
@@ -26,7 +27,7 @@ class UserCreate(BaseModel):
     confirm_password: str
     role: RoleEnum = RoleEnum.student
 
-    @field_validator("registration_number", "phone", "department", "semester", mode="before")
+    @field_validator("registration_number", "admin_id", "phone", "department", "semester", mode="before")
     @classmethod
     def normalize_empty_strings(cls, v):
         if isinstance(v, str):
@@ -47,9 +48,11 @@ class UserCreate(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def validate_student_reg_number(self):
+    def validate_role_fields(self):
         if self.role == RoleEnum.student and not self.registration_number:
             raise ValueError("Registration number is required for students")
+        if self.role == RoleEnum.admin and not (self.admin_id or self.registration_number):
+            raise ValueError("Admin ID is required for admins")
         return self
 
 
@@ -76,6 +79,7 @@ class UserOut(BaseModel):
     id: int
     name: str
     registration_number: Optional[str] = None
+    admin_id: Optional[str] = None
     phone: Optional[str] = None
     department: Optional[str] = None
     semester: Optional[str] = None

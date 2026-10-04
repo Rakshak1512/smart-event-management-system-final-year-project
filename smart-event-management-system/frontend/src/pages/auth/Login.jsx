@@ -6,6 +6,7 @@ import { FiMail, FiLock, FiEye, FiEyeOff, FiCalendar, FiCheckCircle } from "reac
 import ThemeToggle from "../../components/common/ThemeToggle.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import OTPInput from "../../components/common/OTPInput.jsx";
+import TestUsersModal from "../../components/auth/TestUsersModal.jsx";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { authService } from "../../api/services.js";
 
@@ -16,6 +17,9 @@ export default function Login() {
 
   const [role, setRole] = useState("student");
   const [authMethod, setAuthMethod] = useState("password"); // "password", "email_otp"
+
+  // Test users modal state
+  const [isTestModalOpen, setIsTestModalOpen] = useState(false);
 
   // Password state
   const [form, setForm] = useState({ email: "", password: "", remember_me: false });
@@ -34,6 +38,50 @@ export default function Login() {
   const update = (field) => (e) =>
     setForm((f) => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
+  const getDashboardDestination = (userRole) => {
+    const r = (userRole || "").toLowerCase();
+    if (r === "admin") return "/admin/dashboard";
+    if (r === "faculty") return "/faculty/dashboard";
+    if (r === "volunteer") return "/volunteer/dashboard";
+    return "/student/dashboard";
+  };
+
+  const handleUseAccount = (account) => {
+    setRole(account.role);
+    setForm((f) => ({ ...f, email: account.email, password: account.password }));
+    setAuthMethod("password");
+    setIsTestModalOpen(false);
+    toast.success(`${account.label} demo account loaded`);
+  };
+
+  const handleLoginNow = async (account) => {
+    setRole(account.role);
+    setForm((f) => ({ ...f, email: account.email, password: account.password }));
+    setAuthMethod("password");
+    setSubmitting(true);
+    try {
+      const user = await login({
+        email: account.email,
+        password: account.password,
+        role: account.role,
+        remember_me: form.remember_me,
+      });
+      setIsTestModalOpen(false);
+      toast.success(`Welcome back, ${user.name.split(" ")[0]}!`);
+      const dest = location.state?.from || getDashboardDestination(user.role);
+      navigate(dest, { replace: true });
+    } catch (err) {
+      if (!err.response) {
+        toast.error("Unable to connect to the server. Please try again.");
+        return;
+      }
+      const detail = err.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : "Login failed. Please check your credentials.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const validatePasswordForm = () => {
     const e = {};
     if (!/^\S+@\S+\.\S+$/.test(form.email)) e.email = "Enter a valid email address";
@@ -49,23 +97,21 @@ export default function Login() {
     try {
       const user = await login({ ...form, role });
       toast.success(`Welcome back, ${user.name.split(" ")[0]}!`);
-      const dest =
-        location.state?.from ||
-        (user.role === "admin"
-          ? "/admin/dashboard"
-          : user.role === "faculty"
-          ? "/faculty/dashboard"
-          : user.role === "volunteer"
-          ? "/volunteer/dashboard"
-          : "/student/dashboard");
+      const dest = location.state?.from || getDashboardDestination(user.role);
       navigate(dest, { replace: true });
     } catch (err) {
+      if (!err.response) {
+        toast.error("Unable to connect to the server. Please try again.");
+        return;
+      }
       const detail = err.response?.data?.detail;
       if (detail === "Please verify your email first") {
         toast.error("Please verify your email first");
         navigate("/verify-email", { state: { email: form.email } });
+      } else if (typeof detail === "string") {
+        toast.error(detail);
       } else {
-        toast.error(detail || "Login failed. Please check your credentials.");
+        toast.error("Login failed. Please check your credentials.");
       }
     } finally {
       setSubmitting(false);
@@ -467,13 +513,67 @@ export default function Login() {
           )}
 
           {/* Footer link to Register */}
-          <div style={{ textAlign: "center", marginTop: 24, fontSize: 13.5, color: "var(--text-secondary)" }}>
+          <div style={{ textAlign: "center", marginTop: 22, fontSize: 13.5, color: "var(--text-secondary)" }}>
             Don't have an account?{" "}
             <Link to="/register" style={{ color: "#8b5cf6", fontWeight: 600 }}>
               Register here
             </Link>
           </div>
+
+          {/* Secondary Test Users Section */}
+          <div
+            style={{
+              marginTop: 20,
+              paddingTop: 18,
+              borderTop: "1px dashed var(--border-color)",
+              textAlign: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => setIsTestModalOpen(true)}
+              style={{
+                background: "var(--bg-glass)",
+                border: "1px solid rgba(139, 92, 246, 0.3)",
+                color: "var(--text-primary)",
+                borderRadius: 12,
+                padding: "8px 18px",
+                fontSize: 13,
+                fontWeight: 600,
+                cursor: "pointer",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 8,
+                transition: "all 0.2s ease",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "#8b5cf6";
+                e.currentTarget.style.background = "rgba(139, 92, 246, 0.1)";
+                e.currentTarget.style.transform = "translateY(-1px)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "rgba(139, 92, 246, 0.3)";
+                e.currentTarget.style.background = "var(--bg-glass)";
+                e.currentTarget.style.transform = "none";
+              }}
+            >
+              <span>🧪</span>
+              <span>Test Users</span>
+            </button>
+            <p style={{ margin: "6px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
+              Quick access to demo accounts
+            </p>
+          </div>
         </motion.div>
+
+        {/* Interactive Glassmorphism Test Users Modal */}
+        <TestUsersModal
+          isOpen={isTestModalOpen}
+          onClose={() => setIsTestModalOpen(false)}
+          onUseAccount={handleUseAccount}
+          onLoginNow={handleLoginNow}
+          isLoggingIn={submitting}
+        />
       </div>
     </PageTransition>
   );

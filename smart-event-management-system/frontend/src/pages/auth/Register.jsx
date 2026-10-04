@@ -18,6 +18,7 @@ export default function Register() {
     role: "student",
     name: "",
     registration_number: "",
+    admin_id: "",
     department: "",
     semester: "",
     email: "",
@@ -41,9 +42,15 @@ export default function Register() {
   const validate = () => {
     const e = {};
     if (form.name.trim().length < 2) e.name = "Enter your full name";
-    if (form.role === "student" && !form.registration_number.trim()) e.registration_number = "Registration number is required";
-    if (form.role === "student" && !form.department) e.department = "Select your department";
-    if (form.role === "student" && !form.semester) e.semester = "Select your semester";
+    if (form.role === "student") {
+      if (!form.registration_number.trim()) e.registration_number = "Registration number is required";
+      if (!form.department) e.department = "Select your department";
+      if (!form.semester) e.semester = "Select your semester";
+    } else if (form.role === "faculty" || form.role === "volunteer") {
+      if (!form.department) e.department = "Select your department";
+    } else if (form.role === "admin") {
+      if (!form.admin_id.trim()) e.admin_id = "Admin ID is required";
+    }
     if (!/^\S+@\S+\.\S+$/.test(form.email)) e.email = "Enter a valid email address";
     if (form.password.length < 8) e.password = "Password must be at least 8 characters";
     if (form.confirm_password !== form.password) e.confirm_password = "Passwords do not match";
@@ -56,7 +63,24 @@ export default function Register() {
     if (!validate()) return;
     setSubmitting(true);
     try {
-      await register(form);
+      const payload = {
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        password: form.password,
+        confirm_password: form.confirm_password,
+        role: form.role,
+        registration_number:
+          form.role === "student"
+            ? form.registration_number.trim()
+            : form.role === "admin"
+            ? form.admin_id.trim()
+            : undefined,
+        admin_id: form.role === "admin" ? form.admin_id.trim() : undefined,
+        department: form.role === "admin" ? undefined : form.department || undefined,
+        semester: form.role === "student" ? form.semester || undefined : undefined,
+      };
+
+      await register(payload);
       toast.success("Account created! Check your email for the 6-digit verification code.");
       navigate("/verify-email", { state: { email: form.email } });
     } catch (err) {
@@ -181,6 +205,7 @@ export default function Register() {
             </p>
           </div>
 
+          {/* 4-Role Selector */}
           <div
             style={{
               display: "flex",
@@ -189,12 +214,14 @@ export default function Register() {
               padding: 4,
               marginBottom: 22,
               border: "1px solid var(--border-color)",
+              gap: 2,
             }}
           >
             {[
               { id: "student", label: "Student" },
               { id: "faculty", label: "Faculty" },
               { id: "volunteer", label: "Volunteer" },
+              { id: "admin", label: "Admin" },
             ].map((r) => (
               <button
                 key={r.id}
@@ -208,7 +235,9 @@ export default function Register() {
                   borderRadius: 999,
                   transition: "all 0.2s ease",
                   fontWeight: form.role === r.id ? 600 : 500,
-                  fontSize: 12.5,
+                  fontSize: 12,
+                  padding: "6px 2px",
+                  whiteSpace: "nowrap",
                 }}
               >
                 {r.label}
@@ -229,33 +258,49 @@ export default function Register() {
               {errors.name && <span className="form-error">{errors.name}</span>}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-              {form.role === "student" && (
-                <div className="form-group">
-                  <label className="form-label">Registration Number</label>
-                  <input
-                    className="form-input"
-                    value={form.registration_number}
-                    onChange={update("registration_number")}
-                    placeholder="21CS1023"
-                    required
-                  />
-                  {errors.registration_number && <span className="form-error">{errors.registration_number}</span>}
-                </div>
-              )}
+            {/* Admin Specific Field: Admin ID */}
+            {form.role === "admin" && (
               <div className="form-group">
-                <label className="form-label">Department</label>
-                <select className="form-select" value={form.department} onChange={update("department")} required>
-                  <option value="">Select department</option>
-                  {departments.map((d) => (
-                    <option key={d} value={d}>
-                      {d}
-                    </option>
-                  ))}
-                </select>
-                {errors.department && <span className="form-error">{errors.department}</span>}
+                <label className="form-label">Admin ID</label>
+                <input
+                  className="form-input"
+                  value={form.admin_id}
+                  onChange={update("admin_id")}
+                  placeholder="ADM-1001"
+                  required
+                />
+                {errors.admin_id && <span className="form-error">{errors.admin_id}</span>}
               </div>
-              {form.role === "student" && (
+            )}
+
+            {/* Student Specific Fields */}
+            {form.role === "student" && (
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+                  <div className="form-group">
+                    <label className="form-label">Registration Number</label>
+                    <input
+                      className="form-input"
+                      value={form.registration_number}
+                      onChange={update("registration_number")}
+                      placeholder="21CS1023"
+                      required
+                    />
+                    {errors.registration_number && <span className="form-error">{errors.registration_number}</span>}
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label">Department</label>
+                    <select className="form-select" value={form.department} onChange={update("department")} required>
+                      <option value="">Select department</option>
+                      {departments.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                    {errors.department && <span className="form-error">{errors.department}</span>}
+                  </div>
+                </div>
                 <div className="form-group">
                   <label className="form-label">Semester</label>
                   <select className="form-select" value={form.semester} onChange={update("semester")} required>
@@ -268,8 +313,24 @@ export default function Register() {
                   </select>
                   {errors.semester && <span className="form-error">{errors.semester}</span>}
                 </div>
-              )}
-            </div>
+              </>
+            )}
+
+            {/* Faculty and Volunteer Specific Field: Department */}
+            {(form.role === "faculty" || form.role === "volunteer") && (
+              <div className="form-group">
+                <label className="form-label">Department</label>
+                <select className="form-select" value={form.department} onChange={update("department")} required>
+                  <option value="">Select department</option>
+                  {departments.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+                {errors.department && <span className="form-error">{errors.department}</span>}
+              </div>
+            )}
 
             <div className="form-group">
               <label className="form-label">Email Address</label>

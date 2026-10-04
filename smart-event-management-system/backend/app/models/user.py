@@ -9,6 +9,14 @@ class RoleEnum(str, enum.Enum):
     volunteer = "volunteer"
     admin = "admin"
 
+    @classmethod
+    def _missing_(cls, value):
+        if isinstance(value, str):
+            for member in cls:
+                if member.value == value.lower().strip():
+                    return member
+        return None
+
 
 class User:
     def __init__(
@@ -19,6 +27,7 @@ class User:
         hashed_password: str = "",
         role: RoleEnum = RoleEnum.student,
         registration_number: Optional[str] = None,
+        admin_id: Optional[str] = None,
         phone: Optional[str] = None,
         department: Optional[str] = None,
         semester: Optional[str] = None,
@@ -48,7 +57,8 @@ class User:
         else:
             self.role = RoleEnum.student
 
-        self.registration_number = registration_number
+        self.registration_number = registration_number or (admin_id if self.role == RoleEnum.admin else None)
+        self.admin_id = admin_id or (registration_number if self.role == RoleEnum.admin else None)
         self.department = department
         self.semester = semester
         self.profile_picture = profile_picture
@@ -62,6 +72,7 @@ class User:
             "id": self.id,
             "name": self.name,
             "registration_number": self.registration_number,
+            "admin_id": self.admin_id,
             "phone": self.phone,
             "department": self.department,
             "semester": self.semester,
@@ -87,6 +98,7 @@ class User:
             hashed_password=data.get("hashed_password", ""),
             role=data.get("role", RoleEnum.student),
             registration_number=data.get("registration_number"),
+            admin_id=data.get("admin_id") or (data.get("registration_number") if str(data.get("role", "")).lower() == "admin" else None),
             department=data.get("department"),
             semester=data.get("semester"),
             profile_picture=data.get("profile_picture"),

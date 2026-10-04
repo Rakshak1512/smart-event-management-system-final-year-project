@@ -12,8 +12,19 @@ export default function ProtectedRoute({ allowedRoles }) {
     return <Navigate to="/login" replace />;
   }
 
-  if (allowedRoles && !allowedRoles.includes(user.role)) {
-    return <Navigate to="/" replace />;
+  const userRole = (user.role || "").toLowerCase();
+  const normalizedAllowed = allowedRoles?.map((r) => r.toLowerCase());
+
+  if (normalizedAllowed && !normalizedAllowed.includes(userRole)) {
+    const destination =
+      userRole === "admin"
+        ? "/admin/dashboard"
+        : userRole === "faculty"
+        ? "/faculty/dashboard"
+        : userRole === "volunteer"
+        ? "/volunteer/dashboard"
+        : "/student/dashboard";
+    return <Navigate to={destination} replace />;
   }
 
   return <Outlet />;

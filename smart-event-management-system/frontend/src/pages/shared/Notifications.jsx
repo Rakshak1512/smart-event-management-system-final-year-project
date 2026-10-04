@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
-import { FiBell, FiCheck, FiCheckCircle, FiSearch } from "react-icons/fi";
+import { FiBell, FiCheck, FiCheckCircle, FiSearch, FiX } from "react-icons/fi";
 import EmptyState from "../../components/ui/EmptyState.jsx";
 import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import { notificationService } from "../../api/services.js";
@@ -72,7 +72,7 @@ export default function Notifications() {
       </div>
 
       <div className="glass-card" style={{ padding: 16, marginBottom: 22, display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--input-bg)", border: "1.5px solid var(--border-color)", borderRadius: 999, padding: "9px 16px", flex: "1 1 220px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, background: "var(--input-bg)", border: "1.5px solid var(--border-color)", borderRadius: 999, padding: "9px 16px", flex: "1 1 220px", position: "relative" }}>
           <FiSearch color="var(--text-muted)" />
           <input
             placeholder="Search notifications..."
@@ -80,6 +80,24 @@ export default function Notifications() {
             onChange={(e) => setSearch(e.target.value)}
             style={{ border: "none", background: "transparent", outline: "none", color: "var(--text-primary)", width: "100%", fontSize: 14 }}
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: 2,
+                display: "flex",
+                alignItems: "center",
+              }}
+              title="Clear search"
+            >
+              <FiX size={15} />
+            </button>
+          )}
         </div>
         <select className="form-select" style={{ width: 200 }} value={filterType} onChange={(e) => setFilterType(e.target.value)}>
           <option value="">All types</option>

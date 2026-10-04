@@ -96,7 +96,7 @@ def global_search(
                         id=f"event-{ev.id}",
                         title=ev.title,
                         category="Events",
-                        subtitle=f"{ev.category} · {ev.venue or 'Campus'} · {ev.event_date} ({ev.available_seats}/{ev.total_seats} seats left)",
+                        subtitle=f"{ev.category} · {ev.venue or 'Campus'} · {ev.event_date} ({ev.available_seats}/{ev.total_seats} spots available)",
                         link=f"{base_path}/events/{ev.id}" if role == "student" else f"{base_path}/events",
                         badge=ev.category,
                     ))
@@ -161,15 +161,18 @@ def global_search(
                     for r in ev_regs:
                         s_name = (r.student.name if r.student else r.student_name or "").lower()
                         s_reg = (r.student.registration_number if r.student else r.registration_number or "").lower()
+                        s_email = (r.student.email if r.student and r.student.email else "").lower()
+                        s_dept = (r.student.department if r.student and r.student.department else "").lower()
                         t_code = (r.ticket_code or "").lower()
-                        if query_str in s_name or query_str in s_reg or query_str in t_code:
+                        r_st = str(r.status.value if hasattr(r.status, "value") else r.status).lower()
+                        if query_str in s_name or query_str in s_reg or query_str in s_email or query_str in s_dept or query_str in t_code or query_str in r_st:
                             results.append(SearchResultItem(
                                 id=f"reg-{r.id}",
                                 title=f"{r.student.name if r.student else r.student_name} ({r.student.registration_number if r.student else r.registration_number})",
                                 category="Student Registrations",
-                                subtitle=f"Event: {ev.title} · Ticket: {r.ticket_code} · Status: {str(r.status).upper()}",
+                                subtitle=f"Event: {ev.title} · Dept: {r.student.department if r.student and r.student.department else 'General'} · Ticket: {r.ticket_code} · Status: {r_st.upper()}",
                                 link=f"{base_path}/registrations?eventId={ev.id}",
-                                badge=str(r.status).capitalize(),
+                                badge=r_st.capitalize(),
                             ))
         except Exception as reg_err:
             logger.debug(f"Search registrations query error: {reg_err}")

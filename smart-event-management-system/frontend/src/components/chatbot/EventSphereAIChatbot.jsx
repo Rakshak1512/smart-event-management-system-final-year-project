@@ -144,11 +144,11 @@ export default function EventSphereAIChatbot() {
         className="chatbot-trigger-btn"
         style={{
           position: "fixed",
-          bottom: 24,
-          right: 24,
+          bottom: "calc(env(safe-area-inset-bottom, 16px) + 16px)",
+          right: "calc(env(safe-area-inset-right, 16px) + 16px)",
           zIndex: 1040,
-          width: 54,
-          height: 54,
+          width: 52,
+          height: 52,
           borderRadius: "50%",
           background: "var(--gradient-primary)",
           color: "#ffffff",
@@ -171,12 +171,12 @@ export default function EventSphereAIChatbot() {
           className="glass-card chatbot-window"
           style={{
             position: "fixed",
-            bottom: 88,
-            right: 24,
+            bottom: "calc(env(safe-area-inset-bottom, 16px) + 74px)",
+            right: "calc(env(safe-area-inset-right, 16px) + 16px)",
             width: 380,
             maxWidth: "calc(100vw - 32px)",
             height: 520,
-            maxHeight: "calc(100vh - 110px)",
+            maxHeight: "calc(100dvh - 100px)",
             zIndex: 1040,
             borderRadius: 24,
             display: "flex",

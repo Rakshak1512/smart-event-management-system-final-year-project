@@ -57,9 +57,13 @@ out/
 
 # Zip / Archives
 *.zip
+*.zip.*
+*.tmp
+*.bak
 *.tar.gz
 *.rar
 *.7z
+update_project_zip.py
 
 # Runtime & Logs
 logs/

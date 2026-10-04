@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import toast from "react-hot-toast";
-import { FiUploadCloud, FiSearch, FiEdit2, FiTrash2, FiDownload, FiUser, FiEye, FiX, FiFileText } from "react-icons/fi";
+import { FiUploadCloud, FiSearch, FiEdit2, FiTrash2, FiDownload, FiUser, FiEye, FiX, FiFileText, FiAward, FiCheckCircle } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 import Modal from "../../components/ui/Modal.jsx";
 import EmptyState from "../../components/ui/EmptyState.jsx";
@@ -9,6 +9,21 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { certificateService, eventService } from "../../api/services.js";
 import { formatDate } from "../../utils/format.js";
+import AwardStandingSelector from "../../components/certificate/AwardStandingSelector.jsx";
+import StudentDetailsCard from "../../components/certificate/StudentDetailsCard.jsx";
+import {
+  getSuggestedCertificateTitle,
+  getSuggestedAchievementText,
+} from "../../components/certificate/certificateConstants.js";
+
+const initialFormState = {
+  registration_number: "",
+  award_standing: "1st Place",
+  title: "Winner Certificate",
+  achievement_wording: "First Place",
+  score_or_remarks: "",
+  event_id: "",
+};
 
 export default function ManageCertificates() {
   const [certs, setCerts] = useState([]);
@@ -18,7 +33,7 @@ export default function ManageCertificates() {
   const [editTarget, setEditTarget] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
-  // Preview Modal State
+  // Fullscreen Preview Modal State
   const [previewCert, setPreviewCert] = useState(null);
   const [previewBlobUrl, setPreviewBlobUrl] = useState(null);
   const [previewLoading, setPreviewLoading] = useState(false);
@@ -26,14 +41,20 @@ export default function ManageCertificates() {
   const [isPdf, setIsPdf] = useState(true);
   const [downloadingId, setDownloadingId] = useState(null);
 
-  const [form, setForm] = useState({ registration_number: "", title: "", event_id: "" });
+  // Upload / Issue Modal State
+  const [form, setForm] = useState(initialFormState);
   const [student, setStudent] = useState(null);
   const [lookupLoading, setLookupLoading] = useState(false);
+  const [certMode, setCertMode] = useState("auto"); // "auto" | "upload"
   const [file, setFile] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [modalPreviewBlobUrl, setModalPreviewBlobUrl] = useState(null);
+  const [modalPreviewLoading, setModalPreviewLoading] = useState(false);
+  const [userEditedTitle, setUserEditedTitle] = useState(false);
 
   const [editTitle, setEditTitle] = useState("");
   const [editFile, setEditFile] = useState(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const load = () => {
     setLoading(true);
@@ -52,19 +73,28 @@ export default function ManageCertificates() {
     eventService.list({ page: 1, page_size: 50 }).then(({ data }) => setEvents(data.items || [])).catch(() => {});
   }, []);
 
-  // Cleanup object URL
+  // Cleanup object URLs
   useEffect(() => {
     return () => {
       if (previewBlobUrl) {
         window.URL.revokeObjectURL(previewBlobUrl);
       }
+      if (modalPreviewBlobUrl) {
+        window.URL.revokeObjectURL(modalPreviewBlobUrl);
+      }
     };
-  }, [previewBlobUrl]);
+  }, [previewBlobUrl, modalPreviewBlobUrl]);
 
   const openUpload = () => {
-    setForm({ registration_number: "", title: "", event_id: "" });
+    setForm(initialFormState);
+    setCertMode("auto");
     setStudent(null);
     setFile(null);
+    setUserEditedTitle(false);
+    if (modalPreviewBlobUrl) {
+      window.URL.revokeObjectURL(modalPreviewBlobUrl);
+      setModalPreviewBlobUrl(null);
+    }
     setUploadOpen(true);
   };
 
@@ -75,30 +105,113 @@ export default function ManageCertificates() {
     try {
       const { data } = await certificateService.studentDetails(form.registration_number.trim());
       setStudent(data);
+      if (data.registered_events && data.registered_events.length > 0 && !form.event_id) {
+        setForm((f) => ({ ...f, event_id: String(data.registered_events[0].id) }));
+      }
+      toast.success(`Found student: ${data.name}`);
     } catch (err) {
-      toast.error(err.response?.data?.detail || "No student found with that registration number");
+      toast.error(err.response?.data?.detail || "Student not found");
     } finally {
       setLookupLoading(false);
     }
   };
 
-  const handleUpload = async (e) => {
+  const handleStandingChange = (newStanding) => {
+    const suggestedTitle = getSuggestedCertificateTitle(newStanding);
+    const suggestedAchievement = getSuggestedAchievementText(newStanding);
+    setForm((f) => ({
+      ...f,
+      award_standing: newStanding,
+      achievement_wording: suggestedAchievement,
+      title: userEditedTitle ? f.title : suggestedTitle,
+    }));
+  };
+
+  const handleGenerateModalPreview = async () => {
+    if (!student) return toast.error("Please look up a student first");
+    setModalPreviewLoading(true);
+    try {
+      if (modalPreviewBlobUrl) {
+        window.URL.revokeObjectURL(modalPreviewBlobUrl);
+        setModalPreviewBlobUrl(null);
+      }
+      if (certMode === "auto") {
+        const selectedEv = events.find((e) => String(e.id) === String(form.event_id));
+        const blob = await certificateService.generatePreview({
+          registration_number: form.registration_number.trim(),
+          student_name: student.name,
+          event_id: form.event_id ? parseInt(form.event_id) : null,
+          event_title: selectedEv?.title || "Campus Event",
+          position: form.award_standing,
+          award_standing: form.award_standing,
+          achievement_wording: form.achievement_wording,
+          score_or_remarks: form.score_or_remarks,
+          title: form.title,
+          department: student.department,
+          semester: student.semester ? String(student.semester) : "",
+        });
+        const url = window.URL.createObjectURL(blob);
+        setModalPreviewBlobUrl(url);
+      } else {
+        if (!file) return toast.error("Attach a PDF file to preview");
+        const url = window.URL.createObjectURL(file);
+        setModalPreviewBlobUrl(url);
+      }
+    } catch (err) {
+      console.error("Preview error:", err);
+      toast.error("Could not generate certificate preview.");
+    } finally {
+      setModalPreviewLoading(false);
+    }
+  };
+
+  const handleSubmitCertificate = async (e) => {
     e.preventDefault();
     if (!student) return toast.error("Look up a valid registration number first");
-    if (!file) return toast.error("Attach the certificate PDF");
+    if (!form.title.trim()) return toast.error("Certificate title is required");
+    if (certMode === "upload" && !file) return toast.error("Attach the certificate PDF");
+
     setSaving(true);
     try {
-      const fd = new FormData();
-      fd.append("registration_number", form.registration_number.trim());
-      fd.append("title", form.title);
-      if (form.event_id) fd.append("event_id", form.event_id);
-      fd.append("file", file);
-      await certificateService.upload(fd);
-      toast.success(`Certificate uploaded for ${student.name}`);
+      const selectedEv = events.find((e) => String(e.id) === String(form.event_id));
+      let emailRecipient = student.email;
+
+      if (certMode === "auto") {
+        const { data } = await certificateService.autoGenerate({
+          registration_number: form.registration_number.trim(),
+          event_id: form.event_id ? parseInt(form.event_id) : null,
+          event_title: selectedEv?.title || "",
+          position: form.award_standing,
+          award_standing: form.award_standing,
+          achievement_wording: form.achievement_wording,
+          score_or_remarks: form.score_or_remarks,
+          title: form.title.trim(),
+          department: student.department,
+          semester: student.semester ? String(student.semester) : "",
+        });
+        if (data?.student_email) emailRecipient = data.student_email;
+      } else {
+        const fd = new FormData();
+        fd.append("registration_number", form.registration_number.trim());
+        fd.append("title", form.title.trim());
+        if (form.event_id) fd.append("event_id", form.event_id);
+        if (form.award_standing) fd.append("award_standing", form.award_standing);
+        if (form.achievement_wording) fd.append("achievement_wording", form.achievement_wording);
+        if (form.score_or_remarks) fd.append("score_or_remarks", form.score_or_remarks);
+        fd.append("file", file);
+        const { data } = await certificateService.upload(fd);
+        if (data?.student_email) emailRecipient = data.student_email;
+      }
+
+      toast.success(
+        `Certificate saved and email notification dispatched to: ${emailRecipient || student.email}`,
+        { duration: 5000 }
+      );
       setUploadOpen(false);
       load();
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Could not upload certificate");
+      console.error("Certificate save error:", err);
+      toast.error(err.response?.data?.detail || "Could not issue certificate");
     } finally {
       setSaving(false);
     }
@@ -221,8 +334,6 @@ export default function ManageCertificates() {
     }
   };
 
-  const [searchQuery, setSearchQuery] = useState("");
-
   return (
     <PageTransition>
       <div className="section-head" style={{ flexWrap: "wrap", gap: 14 }}>
@@ -234,10 +345,10 @@ export default function ManageCertificates() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {certs.length > 0 && (
-            <div style={{ position: "relative", minWidth: 260 }}>
+            <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
               <input
                 className="form-input"
-                style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+                style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
                 placeholder="Search certificates, students, reg no..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -250,8 +361,29 @@ export default function ManageCertificates() {
                   top: "50%",
                   transform: "translateY(-50%)",
                   color: "var(--text-muted)",
+                  pointerEvents: "none",
                 }}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: 2,
+                  }}
+                  title="Clear search"
+                >
+                  <FiX size={14} />
+                </button>
+              )}
             </div>
           )}
           <button className="btn btn-primary btn-sm" onClick={openUpload}>
@@ -310,118 +442,344 @@ export default function ManageCertificates() {
                 className={`glass-card glass-card-interactive float-card float-delay-${(i % 3) + 1}`}
                 style={{ padding: 22, borderRadius: "20px", display: "flex", flexDirection: "column" }}
               >
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                <div
-                  style={{
-                    width: 46,
-                    height: 46,
-                    borderRadius: 12,
-                    background: "var(--gradient-soft)",
-                    color: "#8b5cf6",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <FiUploadCloud size={22} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
+                  <div
+                    style={{
+                      width: 44,
+                      height: 44,
+                      borderRadius: 12,
+                      background: "var(--gradient-soft)",
+                      color: "#8b5cf6",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <FiAward size={22} />
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {c.award_standing && (
+                      <span className="badge badge-primary" style={{ fontWeight: 700, fontSize: 11 }}>
+                        {c.award_standing}
+                      </span>
+                    )}
+                    <span className="badge badge-info" style={{ fontFamily: "monospace" }}>
+                      {c.registration_number}
+                    </span>
+                  </div>
                 </div>
-                <span className="badge badge-info">{c.registration_number}</span>
+
+                <div style={{ marginBottom: 6 }}>
+                  <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 2, color: "var(--text-primary)" }}>
+                    {c.student_name || c.title}
+                  </h3>
+                  {c.student_name && (
+                    <div style={{ fontSize: 13, color: "var(--text-secondary)", fontWeight: 500 }}>
+                      {c.title}
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16, display: "flex", flexDirection: "column", gap: 3 }}>
+                  {c.department && <div>Branch: <strong style={{ color: "var(--text-secondary)" }}>{c.department}</strong></div>}
+                  {c.event_title && <div>Event: <strong style={{ color: "var(--text-secondary)" }}>{c.event_title}</strong></div>}
+                  <div>Issued {formatDate(c.uploaded_at)}</div>
+                  {c.email_notification_status === "sent" && (
+                    <div style={{ color: "#10b981", display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                      <FiCheckCircle size={12} /> Email Delivered
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ marginTop: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ flex: 1 }}
+                    onClick={() => handleOpenPreview(c)}
+                  >
+                    <FiEye size={13} /> Preview
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ flex: 1 }}
+                    disabled={downloadingId === c.id}
+                    onClick={() => handleDownload(c)}
+                  >
+                    <FiDownload size={13} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    style={{ flex: 1 }}
+                    onClick={() => openEdit(c)}
+                  >
+                    <FiEdit2 size={13} /> Edit
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ background: "rgba(220,38,38,0.12)", color: "var(--danger)" }}
+                    onClick={() => setDeleteTarget(c)}
+                  >
+                    <FiTrash2 size={13} />
+                  </button>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        );
+      })()}
+
+      {/* Upload & Issue Certificate Modal */}
+      <Modal
+        open={uploadOpen}
+        onClose={() => !saving && setUploadOpen(false)}
+        title="Upload & Issue Certificate"
+        width={620}
+      >
+        <div style={{ maxHeight: "78vh", overflowY: "auto", paddingRight: 4 }}>
+          <form onSubmit={handleSubmitCertificate}>
+            {/* Step 1: Student Lookup */}
+            <div className="form-group">
+              <label className="form-label">Student Registration Number</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  className="form-input"
+                  value={form.registration_number}
+                  onChange={(e) => setForm((f) => ({ ...f, registration_number: e.target.value }))}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      lookupStudent();
+                    }
+                  }}
+                  placeholder="e.g. U1BER24S0036 or 21CS1023"
+                  required
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={lookupStudent}
+                  disabled={lookupLoading || !form.registration_number.trim()}
+                  style={{ minWidth: 90 }}
+                >
+                  <FiSearch /> {lookupLoading ? "Searching..." : "Find"}
+                </button>
               </div>
-              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, color: "var(--text-primary)" }}>{c.title}</h3>
-              <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 18 }}>Uploaded {formatDate(c.uploaded_at)}</p>
-              <div style={{ marginTop: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "block", marginTop: 4 }}>
+                Enter the student's register number and click Find to load their verified profile.
+              </span>
+            </div>
+
+            {/* Step 2: Student Details Card */}
+            {student && <StudentDetailsCard student={student} />}
+
+            {/* Step 3: Award Standing Selector */}
+            <AwardStandingSelector
+              value={form.award_standing}
+              onChange={handleStandingChange}
+              onCustomChange={(val) => setForm((f) => ({ ...f, award_standing: val }))}
+            />
+
+            {/* Step 4: Certificate Title */}
+            <div className="form-group">
+              <label className="form-label">Certificate Title</label>
+              <input
+                className="form-input"
+                value={form.title}
+                onChange={(e) => {
+                  setForm((f) => ({ ...f, title: e.target.value }));
+                  setUserEditedTitle(true);
+                }}
+                placeholder="e.g. Winner Certificate"
+                required
+              />
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "block", marginTop: 4 }}>
+                Auto-suggested from the award standing above; feel free to edit if needed.
+              </span>
+            </div>
+
+            {/* Step 5: Certificate Achievement Wording */}
+            <div className="form-group">
+              <label className="form-label">Certificate Achievement Wording</label>
+              <input
+                className="form-input"
+                value={form.achievement_wording}
+                onChange={(e) => setForm((f) => ({ ...f, achievement_wording: e.target.value }))}
+                placeholder="e.g. First Place, Merit & Achievement, Best Innovation"
+                required
+              />
+              <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "block", marginTop: 4 }}>
+                Appears prominently on the official certificate: "for securing <strong>{form.achievement_wording || "[Achievement Wording]"}</strong> in <strong>{events.find((e) => String(e.id) === String(form.event_id))?.title || "[Event Title]"}</strong>".
+              </span>
+            </div>
+
+            {/* Step 6: Score / Remarks */}
+            <div className="form-group">
+              <label className="form-label">Score / Remarks (Optional)</label>
+              <input
+                className="form-input"
+                value={form.score_or_remarks}
+                onChange={(e) => setForm((f) => ({ ...f, score_or_remarks: e.target.value }))}
+                placeholder="e.g. 95/100 points, Best UI & Architecture, Top Performer"
+              />
+            </div>
+
+            {/* Step 7: Related Event */}
+            <div className="form-group">
+              <label className="form-label">Related Event</label>
+              <select
+                className="form-select"
+                value={form.event_id}
+                onChange={(e) => setForm((f) => ({ ...f, event_id: e.target.value }))}
+              >
+                <option value="">General Campus Award (No specific event)</option>
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.title} {ev.event_date ? `(${formatDate(ev.event_date)})` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Step 8: Certificate Issuance Mode */}
+            <div className="form-group" style={{ marginTop: 14 }}>
+              <label className="form-label">Certificate Issuance Mode</label>
+              <div style={{ display: "flex", gap: 10 }}>
                 <button
                   type="button"
-                  className="btn btn-outline btn-sm"
-                  style={{ flex: 1 }}
-                  onClick={() => handleOpenPreview(c)}
+                  className="btn btn-sm"
+                  style={{
+                    flex: 1,
+                    background: certMode === "auto" ? "var(--gradient-primary)" : "var(--bg-elevated)",
+                    color: certMode === "auto" ? "#fff" : "var(--text-secondary)",
+                    border: "1px solid var(--border-color)",
+                    fontWeight: 600,
+                  }}
+                  onClick={() => setCertMode("auto")}
                 >
-                  <FiEye size={13} /> Preview
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  style={{ flex: 1 }}
-                  disabled={downloadingId === c.id}
-                  onClick={() => handleDownload(c)}
-                >
-                  <FiDownload size={13} />
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  style={{ flex: 1 }}
-                  onClick={() => openEdit(c)}
-                >
-                  <FiEdit2 size={13} /> Edit
+                  ✨ Auto-Generate Template
                 </button>
                 <button
                   type="button"
                   className="btn btn-sm"
-                  style={{ background: "rgba(220,38,38,0.12)", color: "var(--danger)" }}
-                  onClick={() => setDeleteTarget(c)}
+                  style={{
+                    flex: 1,
+                    background: certMode === "upload" ? "var(--gradient-primary)" : "var(--bg-elevated)",
+                    color: certMode === "upload" ? "#fff" : "var(--text-secondary)",
+                    border: "1px solid var(--border-color)",
+                    fontWeight: 600,
+                  }}
+                  onClick={() => setCertMode("upload")}
                 >
-                  <FiTrash2 size={13} />
+                  📁 Manual File Upload
                 </button>
               </div>
-            </motion.div>
-          ))}
-        </div>
-      );
-    })()}
+            </div>
 
-      {/* Upload Modal */}
-      <Modal open={uploadOpen} onClose={() => setUploadOpen(false)} title="Upload Certificate" width={480}>
-        <form onSubmit={handleUpload}>
-          <div className="form-group">
-            <label className="form-label">Student Registration Number</label>
-            <div style={{ display: "flex", gap: 8 }}>
-              <input
-                className="form-input"
-                value={form.registration_number}
-                onChange={(e) => setForm((f) => ({ ...f, registration_number: e.target.value }))}
-                placeholder="21CS1023"
-              />
-              <button type="button" className="btn btn-outline btn-sm" onClick={lookupStudent} disabled={lookupLoading}>
-                <FiSearch /> {lookupLoading ? "..." : "Find"}
+            {/* Step 9: Issuance Mode Content & File Input */}
+            {certMode === "auto" ? (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                    EventSphere will auto-generate the official PDF certificate using verified campus credentials.
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-outline btn-sm"
+                    onClick={handleGenerateModalPreview}
+                    disabled={modalPreviewLoading || !student}
+                  >
+                    <FiEye size={13} /> {modalPreviewLoading ? "Generating..." : "Preview Certificate"}
+                  </button>
+                </div>
+
+                {modalPreviewBlobUrl && (
+                  <div style={{ border: "1px solid var(--border-color)", borderRadius: 12, overflow: "hidden", marginTop: 8 }}>
+                    <iframe
+                      src={modalPreviewBlobUrl}
+                      title="Certificate Preview"
+                      style={{ width: "100%", height: "260px", border: "none", background: "#fff" }}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="form-group" style={{ marginBottom: 16 }}>
+                <label className="form-label">Certificate PDF</label>
+                <input
+                  type="file"
+                  accept="application/pdf,image/*"
+                  className="form-input"
+                  onChange={(e) => {
+                    const chosen = e.target.files?.[0] || null;
+                    setFile(chosen);
+                    if (chosen && chosen.type === "application/pdf") {
+                      if (modalPreviewBlobUrl) window.URL.revokeObjectURL(modalPreviewBlobUrl);
+                      setModalPreviewBlobUrl(window.URL.createObjectURL(chosen));
+                    }
+                  }}
+                  required={certMode === "upload"}
+                />
+                <span style={{ fontSize: 11.5, color: "var(--text-muted)", display: "block", marginTop: 4 }}>
+                  Attach official PDF document or high-res certificate image.
+                </span>
+
+                {modalPreviewBlobUrl && file?.type === "application/pdf" && (
+                  <div style={{ border: "1px solid var(--border-color)", borderRadius: 12, overflow: "hidden", marginTop: 10 }}>
+                    <iframe
+                      src={modalPreviewBlobUrl}
+                      title="Uploaded Certificate Preview"
+                      style={{ width: "100%", height: "240px", border: "none", background: "#fff" }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 11: Notification Banner */}
+            <div
+              style={{
+                background: "rgba(139, 92, 246, 0.08)",
+                padding: "12px 16px",
+                borderRadius: 12,
+                fontSize: 12.5,
+                color: "#a5b4fc",
+                marginBottom: 18,
+                border: "1px solid rgba(139, 92, 246, 0.2)",
+              }}
+            >
+              📧 Saving will store the result, issue the digital certificate, and dispatch an email alert to <strong>{student?.email || "the student"}</strong>.
+            </div>
+
+            {/* Step 12: Actions */}
+            <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+              <button
+                type="button"
+                className="btn btn-outline"
+                style={{ flex: 1 }}
+                onClick={() => setUploadOpen(false)}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ flex: 1.4 }}
+                disabled={saving || !student}
+              >
+                {saving
+                  ? "Issuing & Notifying..."
+                  : certMode === "auto"
+                  ? "Issue Certificate"
+                  : "Upload Certificate"}
               </button>
             </div>
-          </div>
-
-          {student && (
-            <div className="glass-card" style={{ padding: 14, marginBottom: 18, display: "flex", gap: 12, alignItems: "center", background: "var(--bg-base)" }}>
-              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "var(--gradient-primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <FiUser size={16} />
-              </div>
-              <div>
-                <div style={{ fontSize: 13.5, fontWeight: 600 }}>{student.name}</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{student.department} · {student.email}</div>
-              </div>
-            </div>
-          )}
-
-          <div className="form-group">
-            <label className="form-label">Certificate Title</label>
-            <input className="form-input" value={form.title} onChange={(e) => setForm((f) => ({ ...f, title: e.target.value }))} placeholder="Hackathon 2026 - Participation" required />
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Related Event (optional)</label>
-            <select className="form-select" value={form.event_id} onChange={(e) => setForm((f) => ({ ...f, event_id: e.target.value }))}>
-              <option value="">None</option>
-              {events.map((ev) => <option key={ev.id} value={ev.id}>{ev.title}</option>)}
-            </select>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Certificate PDF</label>
-            <input type="file" accept="application/pdf,image/*" className="form-input" onChange={(e) => setFile(e.target.files?.[0] || null)} required />
-          </div>
-
-          <button className="btn btn-primary" style={{ width: "100%" }} disabled={saving}>
-            {saving ? "Uploading..." : "Upload Certificate"}
-          </button>
-        </form>
+          </form>
+        </div>
       </Modal>
 
       {/* Edit Modal */}

@@ -87,9 +87,6 @@ async def create_event(
     max_team_size: int = Form(4),
     rules: Optional[str] = Form(None),
     requirements: Optional[str] = Form(None),
-    seating_enabled: Optional[bool] = Form(False),
-    total_rows: Optional[int] = Form(10),
-    seats_per_row: Optional[int] = Form(10),
     poster: Optional[UploadFile] = File(None),
     current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
 ):
@@ -114,9 +111,6 @@ async def create_event(
         max_team_size=max_team_size,
         rules=rules,
         requirements=requirements,
-        seating_enabled=bool(seating_enabled),
-        total_rows=total_rows or 10,
-        seats_per_row=seats_per_row or 10,
     )
     return event
 
@@ -135,9 +129,6 @@ async def update_event(
     max_team_size: Optional[int] = Form(None),
     rules: Optional[str] = Form(None),
     requirements: Optional[str] = Form(None),
-    seating_enabled: Optional[bool] = Form(None),
-    total_rows: Optional[int] = Form(None),
-    seats_per_row: Optional[int] = Form(None),
     poster: Optional[UploadFile] = File(None),
     current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
 ):
@@ -181,13 +172,6 @@ async def update_event(
     if requirements is not None and requirements != event.requirements:
         updates["requirements"] = requirements
         changed_fields["requirements"] = {"old": event.requirements, "new": requirements}
-    if seating_enabled is not None and seating_enabled != event.seating_enabled:
-        updates["seating_enabled"] = bool(seating_enabled)
-        changed_fields["seating_enabled"] = {"old": event.seating_enabled, "new": bool(seating_enabled)}
-    if total_rows is not None:
-        updates["total_rows"] = total_rows
-    if seats_per_row is not None:
-        updates["seats_per_row"] = seats_per_row
 
     if total_seats is not None and total_seats != event.total_seats:
         if total_seats < registered_count:

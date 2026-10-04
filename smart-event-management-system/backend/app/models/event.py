@@ -27,9 +27,7 @@ class Event:
         rules: Optional[str] = None,
         requirements: Optional[str] = None,
         updated_by_name: Optional[str] = None,
-        seating_enabled: bool = False,
-        total_rows: int = 10,
-        seats_per_row: int = 10,
+        **kwargs,
     ):
         self.id = int(id) if id is not None else None
         self.title = title
@@ -56,9 +54,6 @@ class Event:
         self.rules = rules
         self.requirements = requirements
         self.updated_by_name = updated_by_name
-        self.seating_enabled = bool(seating_enabled)
-        self.total_rows = int(total_rows) if total_rows is not None else 10
-        self.seats_per_row = int(seats_per_row) if seats_per_row is not None else 10
 
     def to_dict(self) -> dict:
         return {
@@ -84,9 +79,6 @@ class Event:
             "rules": self.rules,
             "requirements": self.requirements,
             "updated_by_name": self.updated_by_name,
-            "seating_enabled": self.seating_enabled,
-            "total_rows": self.total_rows,
-            "seats_per_row": self.seats_per_row,
         }
 
     @classmethod
@@ -136,7 +128,5 @@ class Event:
             rules=data.get("rules"),
             requirements=data.get("requirements"),
             updated_by_name=data.get("updated_by_name"),
-            seating_enabled=data.get("seating_enabled", False),
-            total_rows=data.get("total_rows", 10),
-            seats_per_row=data.get("seats_per_row", 10),
         )
+

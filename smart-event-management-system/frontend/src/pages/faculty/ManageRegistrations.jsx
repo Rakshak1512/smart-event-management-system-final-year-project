@@ -11,6 +11,7 @@ import {
   FiMapPin,
   FiArrowLeft,
   FiSearch,
+  FiX,
   FiAlertCircle,
   FiEye,
   FiFileText,
@@ -20,6 +21,7 @@ import EmptyState from "../../components/ui/EmptyState.jsx";
 import { SkeletonGrid, SkeletonRow } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { eventService, registrationService } from "../../api/services.js";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate } from "../../utils/format.js";
 import {
   generateRegistrationReportPDF,
@@ -47,6 +49,8 @@ export default function ManageRegistrations() {
   const [reportLoading, setReportLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("registered"); // "registered" | "attended"
   const [studentSearch, setStudentSearch] = useState("");
+
+  const { subscribeToEvent, addListener } = useRealtime();
 
   // Load All Events Catalog with graceful error handling
   const loadEventsCatalog = useCallback(async (showToast = false) => {
@@ -139,28 +143,31 @@ export default function ManageRegistrations() {
   useEffect(() => {
     if (selectedEventId) {
       loadEventRegistrations(true);
+      subscribeToEvent(selectedEventId);
     }
-  }, [selectedEventId, loadEventRegistrations]);
+  }, [selectedEventId, loadEventRegistrations, subscribeToEvent]);
 
-  // Real-time synchronization polling (every 3 seconds) for live attendance check-ins
+  // Real-time WebSocket synchronization for attendance check-ins and registrations
   useEffect(() => {
     if (!selectedEventId) return;
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadEventRegistrations(false);
+
+    const removeListener = addListener((msg) => {
+      if (!msg.event_id || String(msg.event_id) === String(selectedEventId)) {
+        if (
+          msg.type === "REGISTRATION_CREATED" ||
+          msg.type === "REGISTRATION_STATUS_CHANGED" ||
+          msg.type === "ATTENDANCE_CHECKED_IN" ||
+          msg.type === "REGISTRATION_CANCELLED" ||
+          msg.type === "SEAT_ASSIGNED" ||
+          msg.type === "SEAT_REASSIGNED"
+        ) {
+          loadEventRegistrations(false);
+        }
       }
-    }, 3000);
+    });
 
-    const handleFocus = () => {
-      loadEventRegistrations(false);
-    };
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, [selectedEventId, loadEventRegistrations]);
+    return () => removeListener();
+  }, [selectedEventId, addListener, loadEventRegistrations]);
 
   const selectedEvent = events.find((e) => String(e.id) === String(selectedEventId));
 
@@ -291,11 +298,11 @@ export default function ManageRegistrations() {
             </div>
           </div>
 
-          {/* Search bar */}
+          {/* Search bar with clear button */}
           <div style={{ position: "relative", maxWidth: 420, marginBottom: 24 }}>
             <input
               className="form-input"
-              style={{ padding: "10px 14px 10px 38px", fontSize: 13.5 }}
+              style={{ padding: "10px 36px 10px 38px", fontSize: 13.5 }}
               placeholder="Search events by title, category, venue..."
               value={eventSearch}
               onChange={(e) => setEventSearch(e.target.value)}
@@ -310,6 +317,26 @@ export default function ManageRegistrations() {
                 color: "var(--text-muted)",
               }}
             />
+            {eventSearch && (
+              <button
+                type="button"
+                onClick={() => setEventSearch("")}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                }}
+                title="Clear search"
+              >
+                <FiX size={15} />
+              </button>
+            )}
           </div>
 
           {/* Error State */}
@@ -596,7 +623,7 @@ export default function ManageRegistrations() {
                     }}
                   >
                     <div style={{ fontSize: 11.5, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                      Seats Left
+                      Remaining Spots
                     </div>
                     <div style={{ fontSize: 20, fontWeight: 800, color: "var(--warning)" }}>{remainingSeats}</div>
                   </div>
@@ -684,11 +711,11 @@ export default function ManageRegistrations() {
               </button>
             </div>
 
-            {/* Search inside Report */}
-            <div style={{ position: "relative", minWidth: 280 }}>
+            {/* Search inside Report with clear button */}
+            <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
               <input
                 className="form-input"
-                style={{ padding: "8px 14px 8px 34px", fontSize: 13 }}
+                style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
                 placeholder="Search approved students, reg no, branch..."
                 value={studentSearch}
                 onChange={(e) => setStudentSearch(e.target.value)}
@@ -704,6 +731,26 @@ export default function ManageRegistrations() {
                   pointerEvents: "none",
                 }}
               />
+              {studentSearch && (
+                <button
+                  type="button"
+                  onClick={() => setStudentSearch("")}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: 2,
+                  }}
+                  title="Clear search"
+                >
+                  <FiX size={14} />
+                </button>
+              )}
             </div>
           </div>
 
@@ -711,7 +758,7 @@ export default function ManageRegistrations() {
           {/* TAB 1: REGISTERED STUDENTS TABLE (APPROVED ONLY)          */}
           {/* ========================================================= */}
           {activeTab === "registered" && (
-            <div className="glass-card table-wrap" style={{ borderRadius: "20px", overflow: "hidden" }}>
+            <div className="glass-card table-wrap" style={{ borderRadius: "20px" }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -798,7 +845,7 @@ export default function ManageRegistrations() {
           {/* TAB 2: ATTENDED STUDENTS TABLE (CONFIRMED PRESENT ONLY)   */}
           {/* ========================================================= */}
           {activeTab === "attended" && (
-            <div className="glass-card table-wrap" style={{ borderRadius: "20px", overflow: "hidden" }}>
+            <div className="glass-card table-wrap" style={{ borderRadius: "20px" }}>
               <table className="data-table">
                 <thead>
                   <tr>

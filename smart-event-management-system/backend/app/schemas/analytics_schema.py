@@ -13,8 +13,8 @@ class StudentTimelineItem(BaseModel):
     category: str
     date: str
     status: str
-    seat_number: Optional[str] = None
     has_certificate: bool = False
+
 
 
 class StudentAnalytics(BaseModel):

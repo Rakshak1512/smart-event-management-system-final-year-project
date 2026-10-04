@@ -3,8 +3,9 @@ import subprocess
 import sys
 import time
 
-backend_dir = r"c:\Users\raksh\project\EventSphere_Final\smart-event-management-system\backend"
-frontend_dir = r"c:\Users\raksh\project\EventSphere_Final\smart-event-management-system\frontend"
+script_dir = os.path.dirname(os.path.abspath(__file__))
+backend_dir = os.path.join(script_dir, "backend")
+frontend_dir = os.path.join(script_dir, "frontend")
 python_exe = os.path.join(backend_dir, "venv", "Scripts", "python.exe")
 
 DETACHED = 0x00000008 | 0x00000200

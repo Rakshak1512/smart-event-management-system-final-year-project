@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import toast from "react-hot-toast";
-import { FiPlus, FiEdit2, FiTrash2, FiUsers, FiUpload, FiClock, FiUser, FiInfo, FiGrid } from "react-icons/fi";
+import { FiPlus, FiEdit2, FiTrash2, FiUsers, FiUpload, FiClock, FiUser, FiInfo, FiGrid, FiSearch } from "react-icons/fi";
 import Modal from "../../components/ui/Modal.jsx";
 import EmptyState from "../../components/ui/EmptyState.jsx";
 import Pagination from "../../components/ui/Pagination.jsx";
@@ -30,6 +30,7 @@ export default function ManageEvents() {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm);
@@ -166,6 +167,18 @@ export default function ManageEvents() {
     }
   };
 
+  const filteredEvents = events.filter((ev) => {
+    if (!search.trim()) return true;
+    const q = search.toLowerCase().trim();
+    return (
+      (ev.title && ev.title.toLowerCase().includes(q)) ||
+      (ev.category && ev.category.toLowerCase().includes(q)) ||
+      (ev.venue && ev.venue.toLowerCase().includes(q)) ||
+      (ev.organizer_name && ev.organizer_name.toLowerCase().includes(q)) ||
+      (ev.registration_type && ev.registration_type.toLowerCase().includes(q))
+    );
+  });
+
   return (
     <div>
       <div className="section-head">
@@ -180,6 +193,42 @@ export default function ManageEvents() {
         </button>
       </div>
 
+      {/* Search Bar */}
+      <div className="glass-card" style={{ padding: "14px 18px", marginBottom: 20 }}>
+        <div style={{ position: "relative", maxWidth: 460 }}>
+          <FiSearch style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-muted)" }} />
+          <input
+            className="form-input"
+            style={{ paddingLeft: 40, paddingRight: search ? 36 : 14, borderRadius: 10 }}
+            placeholder="Search by event title, category, venue, or organizer..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch("")}
+              style={{
+                position: "absolute",
+                right: 12,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: "2px 6px",
+                fontSize: 14,
+                borderRadius: "50%",
+              }}
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
+
       {loading ? (
         <SkeletonGrid count={6} />
       ) : events.length === 0 ? (
@@ -192,10 +241,20 @@ export default function ManageEvents() {
             </button>
           }
         />
+      ) : filteredEvents.length === 0 ? (
+        <EmptyState
+          title="No matching events"
+          message={`No events match "${search}". Try a different search term.`}
+          action={
+            <button className="btn btn-secondary btn-sm" onClick={() => setSearch("")}>
+              Clear Search
+            </button>
+          }
+        />
       ) : (
         <>
           <div className="grid-cards">
-            {events.map((ev) => (
+            {filteredEvents.map((ev) => (
               <div key={ev.id} className="glass-card" style={{ overflow: "hidden", display: "flex", flexDirection: "column" }}>
                 <div style={{ height: 130, background: "var(--gradient-soft)" }}>
                   {ev.poster_url && <img src={fileUrl(ev.poster_url)} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />}

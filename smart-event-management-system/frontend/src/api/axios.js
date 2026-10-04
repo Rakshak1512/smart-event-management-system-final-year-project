@@ -1,7 +1,16 @@
 import axios from "axios";
 
+// When accessed from an external device or tunnel, route via relative "/api" through Vite's proxy
+// so external clients never attempt to contact an unreachable localhost URL.
+const isExternalAccess =
+  typeof window !== "undefined" &&
+  window.location.hostname !== "localhost" &&
+  window.location.hostname !== "127.0.0.1";
+
 const rawApiUrl = import.meta.env.VITE_API_URL || "";
-export const API_BASE_URL = rawApiUrl
+export const API_BASE_URL = isExternalAccess
+  ? "/api"
+  : rawApiUrl
   ? rawApiUrl.replace(/\/+$/, "").endsWith("/api")
     ? rawApiUrl.replace(/\/+$/, "")
     : `${rawApiUrl.replace(/\/+$/, "")}/api`

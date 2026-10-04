@@ -86,8 +86,11 @@ export const registrationService = {
     window.URL.revokeObjectURL(url);
   },
 
-  forEvent: (eventId) =>
-    api.get(`/registrations/event/${eventId}`),
+  forEvent: (eventId, params = {}) =>
+    api.get(`/registrations/event/${eventId}`, { params }),
+
+  getBranchStats: (eventId) =>
+    api.get(`/registrations/event/${eventId}/branch-stats`),
 
   updateStatus: (id, statusValue) =>
     api.put(`/registrations/${id}/status`, {

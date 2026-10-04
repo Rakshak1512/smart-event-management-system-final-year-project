@@ -9,8 +9,16 @@ from typing import List
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+_backend_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_default_env_path = os.path.join(_backend_root, ".env")
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(_default_env_path, ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # App
     APP_NAME: str = "EventSphere"

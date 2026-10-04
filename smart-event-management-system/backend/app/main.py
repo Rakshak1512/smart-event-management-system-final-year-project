@@ -24,6 +24,7 @@ from app.api.routes import (
     search_routes,
     user_routes,
     volunteer_routes,
+    websocket_routes,
 )
 from app.core.config import settings
 from app.core.firebase import init_firebase
@@ -45,6 +46,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
+    allow_origin_regex=r"https://.*\.trycloudflare\.com|https://.*\.loca\.lt",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,6 +66,12 @@ def on_startup():
         logger.info("Firebase Firestore initialized and connected.")
     except Exception as e:
         logger.error(f"Error initializing Firebase: {e}")
+
+    try:
+        from app.services.seed_service import seed_test_users
+        seed_test_users()
+    except Exception as e:
+        logger.error(f"Error seeding test users: {e}")
 
     # Safe SMTP configuration startup validation without exposing passwords
     smtp_loaded = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
@@ -114,3 +122,4 @@ app.include_router(admin_routes.router)
 app.include_router(admin_routes.faculty_task_router)
 app.include_router(result_routes.router)
 app.include_router(search_routes.router)
+app.include_router(websocket_routes.router)

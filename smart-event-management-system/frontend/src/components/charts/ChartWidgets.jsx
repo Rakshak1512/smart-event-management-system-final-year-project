@@ -41,7 +41,7 @@ const baseOptions = {
 
 export function MonthlyLineChart({ labels, data, label = "Registrations", height = 280 }) {
   return (
-    <div style={{ height }}>
+    <div style={{ position: "relative", width: "100%", maxWidth: "100%", minWidth: 0, height }}>
       <Line
         data={{
           labels,
@@ -67,7 +67,7 @@ export function MonthlyLineChart({ labels, data, label = "Registrations", height
 export function ComparisonBarChart({ labels, datasets, height = 280 }) {
   const palette = ["#6366f1", "#d946ef", "#22c55e", "#f59e0b"];
   return (
-    <div style={{ height }}>
+    <div style={{ position: "relative", width: "100%", maxWidth: "100%", minWidth: 0, height }}>
       <Bar
         data={{
           labels,
@@ -87,7 +87,7 @@ export function ComparisonBarChart({ labels, datasets, height = 280 }) {
 export function CategoryDoughnutChart({ labels, data, height = 260 }) {
   const palette = ["#6366f1", "#8b5cf6", "#d946ef", "#22c55e", "#f59e0b", "#0ea5e9", "#ef4444"];
   return (
-    <div style={{ height, display: "flex", justifyContent: "center" }}>
+    <div style={{ position: "relative", width: "100%", maxWidth: "100%", minWidth: 0, height, display: "flex", justifyContent: "center" }}>
       <Doughnut
         data={{
           labels,

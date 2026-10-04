@@ -26,16 +26,13 @@ export default function Modal({ open, onClose, title, children, width = 480 }) {
   const modalContent = (
     <div
       onClick={onClose}
+      className="modal-backdrop-overlay"
       style={{
         position: "fixed",
         inset: 0,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
         width: "100%",
         height: "100%",
-        minHeight: "100vh",
+        minHeight: "100dvh",
         background: "rgba(10, 12, 20, 0.78)",
         backdropFilter: "blur(8px)",
         WebkitBackdropFilter: "blur(8px)",
@@ -44,19 +41,19 @@ export default function Modal({ open, onClose, title, children, width = 480 }) {
         justifyContent: "center",
         overflowY: "auto",
         zIndex: 99999,
-        padding: "24px 16px",
+        padding: "calc(env(safe-area-inset-top, 16px) + 12px) calc(env(safe-area-inset-right, 16px) + 10px) calc(env(safe-area-inset-bottom, 16px) + 12px) calc(env(safe-area-inset-left, 16px) + 10px)",
         boxSizing: "border-box",
       }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="glass-card"
+        className="glass-card modal-card-content"
         style={{
           width: "100%",
           maxWidth: width,
-          maxHeight: "calc(100vh - 48px)",
+          maxHeight: "calc(100dvh - 40px)",
           overflowY: "auto",
-          padding: "24px 28px",
+          padding: "clamp(16px, 4vw, 26px)",
           background: "var(--bg-elevated)",
           borderRadius: "20px",
           border: "1px solid var(--border-color)",
@@ -71,28 +68,30 @@ export default function Modal({ open, onClose, title, children, width = 480 }) {
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: 18,
-            position: "sticky",
-            top: -24,
-            paddingTop: 4,
+            marginBottom: 16,
             paddingBottom: 8,
-            background: "var(--bg-elevated)",
-            zIndex: 10,
+            borderBottom: "1px solid rgba(255, 255, 255, 0.06)",
           }}
         >
-          <h3 style={{ fontSize: 18, fontWeight: 700, margin: 0, color: "var(--text-primary)" }}>{title}</h3>
+          <h3 style={{ fontSize: "clamp(16px, 3.8vw, 18px)", fontWeight: 700, margin: 0, color: "var(--text-primary)" }}>{title}</h3>
           <button
             onClick={onClose}
             className="icon-btn"
             style={{
-              background: "transparent",
-              border: "none",
+              background: "rgba(255, 255, 255, 0.05)",
+              border: "1px solid rgba(255, 255, 255, 0.1)",
+              borderRadius: "50%",
+              width: 36,
+              height: 36,
+              minWidth: 36,
+              minHeight: 36,
               color: "var(--text-secondary)",
-              fontSize: 20,
+              fontSize: 18,
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
+              transition: "all 0.2s ease",
             }}
             aria-label="Close"
           >

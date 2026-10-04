@@ -16,10 +16,16 @@ import {
   FiRefreshCw,
   FiShield,
   FiCheck,
+  FiUpload,
+  FiImage,
+  FiRepeat,
+  FiDownload,
+  FiFileText,
 } from "react-icons/fi";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { volunteerService } from "../../api/services.js";
+import { generateVolunteerScansPDF } from "../../utils/pdfReportGenerator.js";
 
 export default function VolunteerDashboard() {
   const { user } = useAuth();
@@ -47,6 +53,25 @@ export default function VolunteerDashboard() {
   const [confirming, setConfirming] = useState(false);
   const [confirmedSuccess, setConfirmedSuccess] = useState(null);
 
+  // Camera & Mode state: Strictly two logical cameras: "back" (default) and "front"
+  const [scannerMode, setScannerMode] = useState("camera"); // "camera" | "upload"
+  const [cameraChoice, setCameraChoice] = useState("back"); // "back" | "front"
+  const [hasFrontCamera, setHasFrontCamera] = useState(true);
+  const [hasBackCamera, setHasBackCamera] = useState(true);
+  const [cameraLoading, setCameraLoading] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
+  const [switchingCamera, setSwitchingCamera] = useState(false);
+
+  // References to resolved back & front device IDs (filtered to remove wide/tele/ultra/depth cameras)
+  const backCameraIdRef = useRef(null);
+  const frontCameraIdRef = useRef(null);
+
+  // Upload QR code state
+  const [uploadedFile, setUploadedFile] = useState(null);
+  const [uploadedPreview, setUploadedPreview] = useState(null);
+  const [decodingFile, setDecodingFile] = useState(false);
+
+  const fileInputRef = useRef(null);
   const qrScannerRef = useRef(null);
   const html5QrCodeInstance = useRef(null);
 
@@ -66,65 +91,333 @@ export default function VolunteerDashboard() {
     fetchDashboardData();
   }, []);
 
-  // Initialize camera scanner when modal opens
+  // Completely stop any running camera stream to guarantee only one stream is active at a time
+  const stopActiveStream = async () => {
+    if (html5QrCodeInstance.current) {
+      try {
+        if (html5QrCodeInstance.current.isScanning) {
+          await html5QrCodeInstance.current.stop();
+        }
+      } catch (e) {
+        // Ignore expected teardown errors
+      }
+    }
+  };
+
+  // Enumerate cameras and filter exclusively for the primary standard Front and Back cameras
+  // Ignores wide-angle, ultra-wide, telephoto, macro, virtual, or depth cameras
+  const resolveLogicalCameras = async () => {
+    try {
+      const { Html5Qrcode } = await import("html5-qrcode");
+      const devices = await Html5Qrcode.getCameras();
+      if (!devices || devices.length === 0) {
+        return { backId: null, frontId: null, frontOk: true, backOk: true };
+      }
+
+      const isSpecialLens = (label) => {
+        const l = (label || "").toLowerCase();
+        return (
+          l.includes("wide") ||
+          l.includes("ultra") ||
+          l.includes("tele") ||
+          l.includes("zoom") ||
+          l.includes("macro") ||
+          l.includes("depth") ||
+          l.includes("virtual")
+        );
+      };
+
+      // 1. Resolve standard Back camera (excluding special auxiliary lenses)
+      const standardBack = devices.filter((d) => {
+        const l = (d.label || "").toLowerCase();
+        return (l.includes("back") || l.includes("rear") || l.includes("environment")) && !isSpecialLens(l);
+      });
+      const anyBack = standardBack.length > 0
+        ? standardBack[0]
+        : devices.find((d) => {
+            const l = (d.label || "").toLowerCase();
+            return l.includes("back") || l.includes("rear") || l.includes("environment");
+          });
+
+      // 2. Resolve standard Front camera
+      const standardFront = devices.filter((d) => {
+        const l = (d.label || "").toLowerCase();
+        return (l.includes("front") || l.includes("user") || l.includes("selfie") || l.includes("facetime")) && !isSpecialLens(l);
+      });
+      const anyFront = standardFront.length > 0
+        ? standardFront[0]
+        : devices.find((d) => {
+            const l = (d.label || "").toLowerCase();
+            return l.includes("front") || l.includes("user") || l.includes("selfie") || l.includes("facetime");
+          });
+
+      const frontPresent = anyFront !== undefined || (devices.length === 1 && !anyBack);
+      const backPresent = anyBack !== undefined || (devices.length === 1 && anyBack !== undefined);
+
+      return {
+        backId: anyBack ? anyBack.id : null,
+        frontId: anyFront ? anyFront.id : null,
+        frontOk: frontPresent,
+        backOk: backPresent,
+      };
+    } catch (e) {
+      console.warn("Could not inspect camera devices:", e);
+      return { backId: null, frontId: null, frontOk: true, backOk: true };
+    }
+  };
+
+  // Helper to start the live camera stream for the selected camera choice ("back" or "front")
+  const startCameraStream = async (scanner, targetChoice) => {
+    const choice = targetChoice || cameraChoice;
+    setCameraLoading(true);
+    setCameraError(null);
+
+    // Secure context check (camera requires HTTPS or localhost)
+    if (!window.isSecureContext && window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1") {
+      setCameraError(
+        "Camera access requires a secure connection (HTTPS or localhost). Please use 'Upload QR Image' or manual code entry."
+      );
+      setCameraLoading(false);
+      return;
+    }
+
+    // Stop current stream before starting another
+    await stopActiveStream();
+
+    // Use specific deviceId if resolved, otherwise facingMode standard constraint
+    const primaryConfig = choice === "front"
+      ? (frontCameraIdRef.current ? { deviceId: { exact: frontCameraIdRef.current } } : { facingMode: "user" })
+      : (backCameraIdRef.current ? { deviceId: { exact: backCameraIdRef.current } } : { facingMode: "environment" });
+
+    const qrConfig = {
+      fps: 10,
+      qrbox: { width: 250, height: 250 },
+      aspectRatio: 1.0,
+    };
+
+    try {
+      await scanner.start(
+        primaryConfig,
+        qrConfig,
+        (decodedText) => {
+          handleVerifyTicket(decodedText);
+          try {
+            scanner.stop();
+          } catch (e) {}
+        },
+        () => {}
+      );
+    } catch (err) {
+      console.error("Camera scanner start error with primary config:", err);
+      // Fallback: try direct facingMode string if deviceId exact match fails
+      try {
+        const fallbackConfig = { facingMode: choice === "front" ? "user" : "environment" };
+        await scanner.start(
+          fallbackConfig,
+          qrConfig,
+          (decodedText) => {
+            handleVerifyTicket(decodedText);
+            try {
+              scanner.stop();
+            } catch (e) {}
+          },
+          () => {}
+        );
+      } catch (fallbackErr) {
+        console.error("Camera scanner fallback error:", fallbackErr);
+        let errMsg = "Could not activate camera. Please ensure permissions are granted.";
+        const errStr = String(fallbackErr).toLowerCase();
+        if (fallbackErr.name === "NotAllowedError" || errStr.includes("permission")) {
+          errMsg = "Camera permission was denied. Please allow camera permissions in your browser or switch to 'Upload QR Image'.";
+        } else if (fallbackErr.name === "NotFoundError" || errStr.includes("not found")) {
+          if (choice === "front") {
+            errMsg = "Front camera was not detected on this device. Please use the Back Camera.";
+            setHasFrontCamera(false);
+          } else {
+            errMsg = "Back camera was not detected on this device. You can try the Front Camera or 'Upload QR Image'.";
+            setHasBackCamera(false);
+          }
+        } else if (fallbackErr.name === "NotReadableError" || errStr.includes("in use")) {
+          errMsg = "Camera is currently in use by another app or browser tab. Please close other camera apps and retry.";
+        }
+        setCameraError(errMsg);
+      }
+    } finally {
+      setCameraLoading(false);
+    }
+  };
+
+  // Initialize or reconfigure camera scanner when modal opens in camera mode
   useEffect(() => {
     let isMounted = true;
-    if (scannerOpen && !verifiedAttendee && !confirmedSuccess) {
+    if (scannerOpen && scannerMode === "camera" && !verifiedAttendee && !confirmedSuccess) {
       const startScanner = async () => {
         try {
           const { Html5Qrcode } = await import("html5-qrcode");
           if (!isMounted || !document.getElementById("qr-reader-box")) return;
 
-          if (html5QrCodeInstance.current) {
-            try {
-              await html5QrCodeInstance.current.stop();
-            } catch (e) {}
+          // Stop existing stream if any
+          await stopActiveStream();
+
+          // Enumerate to pick primary Back & Front cameras (filtering out wide/tele/ultra)
+          const { backId, frontId, frontOk, backOk } = await resolveLogicalCameras();
+          if (isMounted) {
+            backCameraIdRef.current = backId;
+            frontCameraIdRef.current = frontId;
+            setHasFrontCamera(frontOk);
+            setHasBackCamera(backOk);
           }
 
           const scanner = new Html5Qrcode("qr-reader-box");
           html5QrCodeInstance.current = scanner;
 
-          await scanner.start(
-            { facingMode: "environment" },
-            {
-              fps: 10,
-              qrbox: { width: 250, height: 250 },
-              aspectRatio: 1.0,
-            },
-            (decodedText) => {
-              handleVerifyTicket(decodedText);
-              try {
-                scanner.stop();
-              } catch (e) {}
-            },
-            (error) => {
-              // ignore frame read errors
-            }
-          );
+          if (isMounted) {
+            // Default to Back camera for QR scanning on mobile & all devices
+            const initialChoice = backOk ? "back" : (frontOk ? "front" : "back");
+            setCameraChoice(initialChoice);
+            await startCameraStream(scanner, initialChoice);
+          }
         } catch (e) {
-          console.log("Camera scanner not started or camera unavailable:", e);
+          console.log("Camera scanner initialization error:", e);
         }
       };
 
-      // small delay to ensure DOM is rendered
-      const timer = setTimeout(startScanner, 300);
+      const timer = setTimeout(startScanner, 200);
       return () => {
         isMounted = false;
         clearTimeout(timer);
-        if (html5QrCodeInstance.current) {
-          try {
-            html5QrCodeInstance.current.stop();
-          } catch (e) {}
-        }
+        stopActiveStream();
       };
     } else {
+      stopActiveStream();
+    }
+  }, [scannerOpen, scannerMode, verifiedAttendee, confirmedSuccess]);
+
+  // Select camera choice directly: strictly "back" or "front"
+  const handleSelectCamera = async (targetChoice) => {
+    if (switchingCamera || cameraLoading) return;
+    if (targetChoice === "front" && !hasFrontCamera) {
+      toast.error("Front camera is not available on this device.");
+      return;
+    }
+    if (targetChoice === "back" && !hasBackCamera) {
+      toast.error("Back camera is not available on this device.");
+      return;
+    }
+    if (targetChoice === cameraChoice && !cameraError) {
+      return; // Already on this camera
+    }
+
+    setSwitchingCamera(true);
+    setCameraError(null);
+
+    try {
+      await stopActiveStream();
+      setCameraChoice(targetChoice);
+
+      const { Html5Qrcode } = await import("html5-qrcode");
+      let scanner = html5QrCodeInstance.current;
+      if (!scanner) {
+        scanner = new Html5Qrcode("qr-reader-box");
+        html5QrCodeInstance.current = scanner;
+      }
+
+      await startCameraStream(scanner, targetChoice);
+      toast.success(`Switched to ${targetChoice === "back" ? "Back" : "Front"} Camera`);
+    } catch (err) {
+      console.error("Camera switch error:", err);
+      toast.error("Failed to switch camera.");
+    } finally {
+      setSwitchingCamera(false);
+    }
+  };
+
+  // Camera Switch Handler: toggles between Front and Back camera
+  const handleSwitchCamera = async () => {
+    if (switchingCamera || cameraLoading) return;
+    const nextChoice = cameraChoice === "back" ? "front" : "back";
+    await handleSelectCamera(nextChoice);
+  };
+
+  // QR Image File Upload & Decoding Handler
+  const handleFileUpload = async (file) => {
+    if (!file) return;
+
+    const validTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+    if (!validTypes.includes(file.type)) {
+      toast.error("Please upload a valid image file (PNG, JPG, JPEG, or WebP)");
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) {
+      toast.error("File size exceeds 10MB limit.");
+      return;
+    }
+
+    setUploadedFile(file);
+    setUploadedPreview(URL.createObjectURL(file));
+    setDecodingFile(true);
+    setVerifyError(null);
+
+    try {
+      // Stop live camera if running
       if (html5QrCodeInstance.current) {
         try {
-          html5QrCodeInstance.current.stop();
+          if (html5QrCodeInstance.current.isScanning) {
+            await html5QrCodeInstance.current.stop();
+          }
         } catch (e) {}
       }
+
+      const { Html5Qrcode } = await import("html5-qrcode");
+      let scanner = html5QrCodeInstance.current;
+      if (!scanner) {
+        scanner = new Html5Qrcode("qr-reader-box");
+        html5QrCodeInstance.current = scanner;
+      }
+
+      const decodedText = await scanner.scanFile(file, true);
+      if (decodedText) {
+        toast.success("QR Code detected in image!");
+        await handleVerifyTicket(decodedText);
+      }
+    } catch (err) {
+      console.error("QR decode from file error:", err);
+      setVerifyError(
+        "No readable QR code found in this image. Please ensure the QR code is clearly visible, in-focus, and well-lit, or enter the code manually."
+      );
+    } finally {
+      setDecodingFile(false);
     }
-  }, [scannerOpen, verifiedAttendee, confirmedSuccess]);
+  };
+
+  const handleClearUploadedFile = () => {
+    setUploadedFile(null);
+    if (uploadedPreview) {
+      URL.revokeObjectURL(uploadedPreview);
+      setUploadedPreview(null);
+    }
+    setVerifyError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  // Download Volunteer Scans Log as PDF
+  const handleDownloadScansPDF = () => {
+    if (!stats.recent_scans || stats.recent_scans.length === 0) {
+      toast.error("No scans recorded to generate PDF report.");
+      return;
+    }
+    const targetEvent = stats.assigned_events?.find((e) => e.id === selectedEventId);
+    generateVolunteerScansPDF({
+      scans: stats.recent_scans,
+      volunteerName: stats.volunteer_name,
+      volunteerId: stats.volunteer_id,
+      eventTitle: targetEvent?.title || null,
+    });
+    toast.success("Volunteer Attendance Report downloaded as PDF!");
+  };
 
   const handleVerifyTicket = async (ticketPayload) => {
     const code = (ticketPayload || manualCode).trim();
@@ -393,10 +686,10 @@ export default function VolunteerDashboard() {
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               {stats.assigned_events && stats.assigned_events.length > 0 && (
-                <div style={{ position: "relative", minWidth: 240 }}>
+                <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
                   <input
                     className="form-input"
-                    style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+                    style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
                     placeholder="Search events, venue, category..."
                     value={eventSearch}
                     onChange={(e) => setEventSearch(e.target.value)}
@@ -409,8 +702,29 @@ export default function VolunteerDashboard() {
                       top: "50%",
                       transform: "translateY(-50%)",
                       color: "var(--text-muted)",
+                      pointerEvents: "none",
                     }}
                   />
+                  {eventSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setEventSearch("")}
+                      style={{
+                        position: "absolute",
+                        right: 12,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                        padding: 2,
+                      }}
+                      title="Clear search"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  )}
                 </div>
               )}
               <button
@@ -567,28 +881,75 @@ export default function VolunteerDashboard() {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Recent Scans Log</h2>
-            {stats.recent_scans && stats.recent_scans.length > 0 && (
-              <div style={{ position: "relative", minWidth: 240 }}>
-                <input
-                  className="form-input"
-                  style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
-                  placeholder="Search student, reg no, event..."
-                  value={scanSearch}
-                  onChange={(e) => setScanSearch(e.target.value)}
-                />
-                <FiSearch
-                  size={14}
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>Recent Scans Log</h2>
+              {stats.recent_scans && stats.recent_scans.length > 0 && (
+                <span className="badge badge-info">{stats.recent_scans.length} Verified</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              {stats.recent_scans && stats.recent_scans.length > 0 && (
+                <button
+                  type="button"
+                  onClick={handleDownloadScansPDF}
+                  className="btn btn-sm btn-outline"
                   style={{
-                    position: "absolute",
-                    left: 12,
-                    top: "50%",
-                    transform: "translateY(-50%)",
-                    color: "var(--text-muted)",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "7px 14px",
+                    borderRadius: 10,
+                    fontSize: 12.5,
+                    fontWeight: 600,
                   }}
-                />
-              </div>
-            )}
+                  title="Download Attendance Scans Log as PDF"
+                >
+                  <FiDownload size={14} /> Download Scans PDF
+                </button>
+              )}
+              {stats.recent_scans && stats.recent_scans.length > 0 && (
+                <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
+                  <input
+                    className="form-input"
+                    style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
+                    placeholder="Search student, reg no, event..."
+                    value={scanSearch}
+                    onChange={(e) => setScanSearch(e.target.value)}
+                  />
+                  <FiSearch
+                    size={14}
+                    style={{
+                      position: "absolute",
+                      left: 12,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      color: "var(--text-muted)",
+                      pointerEvents: "none",
+                    }}
+                  />
+                  {scanSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setScanSearch("")}
+                      style={{
+                        position: "absolute",
+                        right: 10,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        background: "none",
+                        border: "none",
+                        color: "var(--text-muted)",
+                        cursor: "pointer",
+                        padding: 2,
+                      }}
+                      title="Clear search"
+                    >
+                      <FiX size={14} />
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {(() => {
@@ -612,7 +973,7 @@ export default function VolunteerDashboard() {
               }
 
               return (
-                <div style={{ overflowX: "auto" }}>
+                <div className="table-wrap" style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, textAlign: "left" }}>
                     <thead>
                       <tr style={{ borderBottom: "1px solid var(--border-color)", color: "var(--text-secondary)" }}>
@@ -691,7 +1052,8 @@ export default function VolunteerDashboard() {
                 alignItems: "center",
                 justifyContent: "center",
                 zIndex: 999,
-                padding: "20px",
+                padding: "calc(env(safe-area-inset-top, 16px) + 10px) calc(env(safe-area-inset-right, 16px) + 8px) calc(env(safe-area-inset-bottom, 16px) + 10px) calc(env(safe-area-inset-left, 16px) + 8px)",
+                boxSizing: "border-box",
               }}
             >
               <motion.div
@@ -709,13 +1071,14 @@ export default function VolunteerDashboard() {
                   overflow: "hidden",
                   display: "flex",
                   flexDirection: "column",
-                  maxHeight: "90vh",
+                  maxHeight: "calc(100dvh - 36px)",
+                  boxSizing: "border-box",
                 }}
               >
                 {/* Modal Header */}
                 <div
                   style={{
-                    padding: "20px 24px",
+                    padding: "clamp(12px, 3vw, 20px) clamp(14px, 3.5vw, 24px)",
                     borderBottom: "1px solid var(--border-color)",
                     display: "flex",
                     justifyContent: "space-between",
@@ -762,7 +1125,7 @@ export default function VolunteerDashboard() {
                 </div>
 
                 {/* Modal Body */}
-                <div style={{ padding: "24px", overflowY: "auto" }}>
+                <div style={{ padding: "clamp(14px, 3.5vw, 24px)", overflowY: "auto" }}>
                   {/* STATE 1: SUCCESS CONFIRMATION */}
                   {confirmedSuccess && (
                     <motion.div
@@ -926,22 +1289,373 @@ export default function VolunteerDashboard() {
                   {/* STATE 3: LIVE SCANNER / CODE ENTRY */}
                   {!confirmedSuccess && !verifiedAttendee && (
                     <div>
-                      {/* Live Camera Viewfinder Box */}
-                      <div
-                        id="qr-reader-box"
-                        style={{
-                          width: "100%",
-                          minHeight: 260,
-                          background: "#000",
-                          borderRadius: 16,
-                          overflow: "hidden",
-                          marginBottom: 20,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          border: "1.5px dashed rgba(139, 92, 246, 0.4)",
-                        }}
-                      />
+                      {/* Mode Switcher Tabs */}
+                      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerMode("camera");
+                            setVerifyError(null);
+                          }}
+                          className="btn btn-sm"
+                          style={{
+                            flex: 1,
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            background: scannerMode === "camera" ? "var(--gradient-primary)" : "var(--bg-glass)",
+                            color: scannerMode === "camera" ? "#ffffff" : "var(--text-secondary)",
+                            border: scannerMode === "camera" ? "none" : "1px solid var(--border-color)",
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <FiCamera size={15} /> Live Camera Scan
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerMode("upload");
+                            setVerifyError(null);
+                          }}
+                          className="btn btn-sm"
+                          style={{
+                            flex: 1,
+                            padding: "8px 12px",
+                            borderRadius: 10,
+                            background: scannerMode === "upload" ? "var(--gradient-primary)" : "var(--bg-glass)",
+                            color: scannerMode === "upload" ? "#ffffff" : "var(--text-secondary)",
+                            border: scannerMode === "upload" ? "none" : "1px solid var(--border-color)",
+                            fontWeight: 600,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            gap: 6,
+                          }}
+                        >
+                          <FiUpload size={15} /> Upload QR Image
+                        </button>
+                      </div>
+
+                      {/* MODE A: LIVE CAMERA */}
+                      {scannerMode === "camera" && (
+                        <div>
+                          {/* Camera Controls Toolbar: Exclusively Front Camera & Back Camera */}
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              flexWrap: "wrap",
+                              gap: 10,
+                              marginBottom: 12,
+                              padding: "0 2px",
+                            }}
+                          >
+                            {/* Strictly two options: Back Camera and Front Camera */}
+                            <div
+                              style={{
+                                display: "inline-flex",
+                                gap: 4,
+                                background: "var(--bg-glass)",
+                                padding: 4,
+                                borderRadius: 12,
+                                border: "1px solid var(--border-color)",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => handleSelectCamera("back")}
+                                disabled={switchingCamera || cameraLoading || !hasBackCamera}
+                                style={{
+                                  padding: "6px 14px",
+                                  borderRadius: 8,
+                                  fontSize: 12.5,
+                                  fontWeight: cameraChoice === "back" ? 700 : 500,
+                                  background: cameraChoice === "back" ? "var(--gradient-primary)" : "transparent",
+                                  color: cameraChoice === "back" ? "#ffffff" : "var(--text-secondary)",
+                                  border: "none",
+                                  cursor: hasBackCamera ? "pointer" : "not-allowed",
+                                  opacity: hasBackCamera ? 1 : 0.45,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  transition: "all 0.2s ease",
+                                }}
+                                title="Use Back Camera (Recommended for QR scanning)"
+                              >
+                                <FiCamera size={14} /> Back Camera
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => handleSelectCamera("front")}
+                                disabled={switchingCamera || cameraLoading || !hasFrontCamera}
+                                style={{
+                                  padding: "6px 14px",
+                                  borderRadius: 8,
+                                  fontSize: 12.5,
+                                  fontWeight: cameraChoice === "front" ? 700 : 500,
+                                  background: cameraChoice === "front" ? "var(--gradient-primary)" : "transparent",
+                                  color: cameraChoice === "front" ? "#ffffff" : "var(--text-secondary)",
+                                  border: "none",
+                                  cursor: hasFrontCamera ? "pointer" : "not-allowed",
+                                  opacity: hasFrontCamera ? 1 : 0.45,
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: 6,
+                                  transition: "all 0.2s ease",
+                                }}
+                                title={hasFrontCamera ? "Use Front Camera" : "Front camera not detected on this device"}
+                              >
+                                <FiUser size={14} /> Front Camera
+                                {!hasFrontCamera && (
+                                  <span style={{ fontSize: 10, opacity: 0.7 }}>(N/A)</span>
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Switch Camera Button */}
+                            <button
+                              type="button"
+                              onClick={handleSwitchCamera}
+                              disabled={switchingCamera || cameraLoading || (!hasFrontCamera && !hasBackCamera)}
+                              className="btn btn-sm btn-outline"
+                              style={{
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 6,
+                                padding: "7px 14px",
+                                borderRadius: 10,
+                                fontSize: 12.5,
+                                fontWeight: 600,
+                                minHeight: 34,
+                              }}
+                              title="Toggle between Front and Back camera"
+                            >
+                              <FiRepeat size={13} className={switchingCamera ? "spin-icon" : ""} />
+                              {switchingCamera ? "Switching..." : "Switch Camera"}
+                            </button>
+                          </div>
+
+                          {/* Active Camera Indicator */}
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "center",
+                              marginBottom: 10,
+                              fontSize: 12,
+                              color: "var(--text-secondary)",
+                              padding: "0 2px",
+                            }}
+                          >
+                            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                              <span
+                                style={{
+                                  width: 8,
+                                  height: 8,
+                                  borderRadius: "50%",
+                                  background: cameraError ? "var(--danger)" : "#10b981",
+                                  boxShadow: cameraError
+                                    ? "0 0 8px rgba(239, 68, 68, 0.6)"
+                                    : "0 0 8px rgba(16, 185, 129, 0.6)",
+                                  display: "inline-block",
+                                }}
+                              />
+                              {cameraError
+                                ? "Camera Inactive"
+                                : cameraChoice === "back"
+                                ? "Active: Back Camera (Default for QR)"
+                                : "Active: Front Camera"}
+                            </span>
+
+                            {!hasFrontCamera && (
+                              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                                Front camera unavailable on this device
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Error Notice with Quick Actions */}
+                          {cameraError && (
+                            <div
+                              style={{
+                                padding: "14px",
+                                borderRadius: 14,
+                                background: "rgba(239, 68, 68, 0.1)",
+                                border: "1px solid rgba(239, 68, 68, 0.3)",
+                                color: "#fca5a5",
+                                fontSize: 12.5,
+                                marginBottom: 14,
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 700, marginBottom: 4 }}>
+                                <FiAlertCircle size={15} /> Camera Notice
+                              </div>
+                              <div style={{ marginBottom: 10 }}>{cameraError}</div>
+                              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectCamera(cameraChoice)}
+                                  className="btn btn-sm btn-outline"
+                                  style={{ fontSize: 11.5, padding: "5px 12px", borderColor: "rgba(239, 68, 68, 0.4)" }}
+                                >
+                                  <FiRefreshCw size={12} /> Retry Camera
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleSwitchCamera}
+                                  className="btn btn-sm btn-outline"
+                                  style={{ fontSize: 11.5, padding: "5px 12px", borderColor: "rgba(239, 68, 68, 0.4)" }}
+                                >
+                                  <FiRepeat size={12} /> Switch to {cameraChoice === "back" ? "Front" : "Back"} Camera
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setScannerMode("upload")}
+                                  className="btn btn-sm btn-primary"
+                                  style={{ fontSize: 11.5, padding: "5px 12px" }}
+                                >
+                                  <FiUpload size={12} /> Upload QR Image Instead
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Live Camera Viewfinder Box */}
+                          <div
+                            id="qr-reader-box"
+                            style={{
+                              width: "100%",
+                              minHeight: 250,
+                              background: "#000",
+                              borderRadius: 16,
+                              overflow: "hidden",
+                              marginBottom: 16,
+                              display: "flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              border: "1.5px dashed rgba(139, 92, 246, 0.4)",
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {/* MODE B: UPLOAD QR IMAGE */}
+                      {scannerMode === "upload" && (
+                        <div>
+                          <input
+                            type="file"
+                            ref={fileInputRef}
+                            accept="image/png, image/jpeg, image/jpg, image/webp"
+                            style={{ display: "none" }}
+                            onChange={(e) => {
+                              if (e.target.files && e.target.files[0]) {
+                                handleFileUpload(e.target.files[0]);
+                              }
+                            }}
+                          />
+
+                          {!uploadedPreview ? (
+                            <div
+                              onClick={() => fileInputRef.current?.click()}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                                  handleFileUpload(e.dataTransfer.files[0]);
+                                }
+                              }}
+                              style={{
+                                border: "2px dashed rgba(139, 92, 246, 0.5)",
+                                borderRadius: 16,
+                                padding: "32px 16px",
+                                textAlign: "center",
+                                cursor: "pointer",
+                                background: "rgba(139, 92, 246, 0.05)",
+                                transition: "all 0.2s ease",
+                                marginBottom: 16,
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: 48,
+                                  height: 48,
+                                  borderRadius: "50%",
+                                  background: "rgba(139, 92, 246, 0.15)",
+                                  color: "#8b5cf6",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  margin: "0 auto 10px",
+                                  fontSize: 22,
+                                }}
+                              >
+                                <FiUpload />
+                              </div>
+                              <h4 style={{ fontSize: 15, fontWeight: 700, margin: "0 0 4px 0", color: "var(--text-primary)" }}>
+                                Select or Drop QR Code Image
+                              </h4>
+                              <p style={{ fontSize: 12.5, color: "var(--text-secondary)", margin: "0 0 10px 0" }}>
+                                Tap to pick from gallery or drag a QR code screenshot here
+                              </p>
+                              <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                                PNG, JPG, JPEG, and WebP (up to 10MB)
+                              </span>
+                            </div>
+                          ) : (
+                            <div
+                              style={{
+                                borderRadius: 16,
+                                padding: 14,
+                                background: "var(--bg-glass)",
+                                border: "1px solid var(--border-color)",
+                                marginBottom: 16,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 14,
+                              }}
+                            >
+                              <img
+                                src={uploadedPreview}
+                                alt="QR Preview"
+                                style={{
+                                  width: 72,
+                                  height: 72,
+                                  objectFit: "cover",
+                                  borderRadius: 12,
+                                  border: "1px solid var(--border-color)",
+                                }}
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", marginBottom: 2 }}>
+                                  {uploadedFile?.name || "QR Image"}
+                                </div>
+                                <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 8 }}>
+                                  {decodingFile ? (
+                                    <span style={{ color: "#8b5cf6", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                      <FiRefreshCw className="spin-icon" size={12} /> Analyzing QR Code...
+                                    </span>
+                                  ) : (
+                                    "Image ready for validation"
+                                  )}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={handleClearUploadedFile}
+                                  className="btn btn-sm btn-outline"
+                                  style={{ fontSize: 11.5, padding: "4px 10px", borderRadius: 8 }}
+                                >
+                                  Remove / Replace Image
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {verifyError && (
                         <div
@@ -958,7 +1672,7 @@ export default function VolunteerDashboard() {
                             gap: 8,
                           }}
                         >
-                          <FiAlertCircle /> {verifyError}
+                          <FiAlertCircle size={16} /> {verifyError}
                         </div>
                       )}
 

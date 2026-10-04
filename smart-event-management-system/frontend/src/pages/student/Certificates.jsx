@@ -146,10 +146,10 @@ export default function StudentCertificates() {
         </div>
 
         {certs.length > 0 && (
-          <div style={{ position: "relative", minWidth: 260 }}>
+          <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
             <input
               className="form-input"
-              style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+              style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
               placeholder="Search certificates..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -162,8 +162,29 @@ export default function StudentCertificates() {
                 top: "50%",
                 transform: "translateY(-50%)",
                 color: "var(--text-muted)",
+                pointerEvents: "none",
               }}
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                }}
+                title="Clear search"
+              >
+                <FiX size={14} />
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -201,25 +222,39 @@ export default function StudentCertificates() {
                 borderRadius: "20px",
               }}
             >
-              <div
-                style={{
-                  width: 50,
-                  height: 50,
-                  borderRadius: 14,
-                  background: "var(--gradient-soft)",
-                  color: "#8b5cf6",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginBottom: 16,
-                }}
-              >
-                <FiAward size={24} />
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 14 }}>
+                <div
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: 14,
+                    background: "var(--gradient-soft)",
+                    color: "#8b5cf6",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <FiAward size={24} />
+                </div>
+                {c.award_standing && (
+                  <span className="badge badge-primary" style={{ fontWeight: 700, fontSize: 11.5 }}>
+                    {c.award_standing}
+                  </span>
+                )}
               </div>
-              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6, color: "var(--text-primary)" }}>
+
+              <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 4, color: "var(--text-primary)" }}>
                 {c.title}
               </h3>
-              <p style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 20 }}>
+
+              {c.event_title && (
+                <div style={{ fontSize: 12.5, color: "var(--text-secondary)", fontWeight: 500, marginBottom: 4 }}>
+                  Event: <strong style={{ color: "var(--text-primary)" }}>{c.event_title}</strong>
+                </div>
+              )}
+
+              <p style={{ fontSize: 12.5, color: "var(--text-muted)", marginBottom: 18 }}>
                 Issued {formatDate(c.uploaded_at)}
               </p>
 

@@ -46,6 +46,26 @@ class RegistrationStatusUpdate(BaseModel):
     status: RegistrationStatus
 
 
+class BranchStatItem(BaseModel):
+    branch: str
+    total_registrations: int
+    approved: int
+    pending: int
+    cancelled: int
+    attended: int
+
+
+class BranchStatsOut(BaseModel):
+    total_registrations: int
+    total_branches: int
+    approved_registrations: int
+    pending_registrations: int
+    cancelled_registrations: int
+    attended_registrations: int
+    branches: list[BranchStatItem] = []
+
+
+
 class StudentSearchOut(BaseModel):
     id: int
     name: str

@@ -443,3 +443,214 @@ export const generateWinnersReportPDF = ({ event, results }) => {
   addPageNumbers(doc);
   doc.save(getPdfFilename(event?.title, "Winners"));
 };
+
+/**
+ * 5. UNIVERSAL CONFIGURABLE REPORT PDF GENERATOR
+ * Supports custom title, subtitle, date range, filters, column selection,
+ * sorting, summary metrics cards, repeated multi-page headers, and selectable text.
+ */
+export const generateCustomReportPDF = ({
+  title = "EventSphere Report",
+  subtitle = "Official Campus Report",
+  event = null,
+  metadata = [], // Array of { label: string, value: string }
+  headers = [],  // Array of column header strings
+  rows = [],     // 2D Array of table values
+  orientation = "landscape",
+  includeSummary = true,
+  summaryCards = [], // Array of { label: string, value: string|number, color?: [r,g,b] }
+  filename = null,
+  returnDoc = false,
+}) => {
+  const doc = new jsPDF({
+    orientation: orientation || "landscape",
+    unit: "mm",
+    format: "a4",
+  });
+
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  // Top header banner background
+  doc.setFillColor(79, 70, 229); // Primary Indigo #4f46e5
+  doc.rect(0, 0, pageWidth, 28, "F");
+
+  // Secondary accent line
+  doc.setFillColor(168, 85, 247); // Purple accent #a855f7
+  doc.rect(0, 28, pageWidth, 2, "F");
+
+  // Title text
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.text("EventSphere", 14, 13);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9.5);
+  doc.text("Smart Campus Management System", 14, 21);
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(13);
+  doc.text(String(title || "OFFICIAL REPORT").toUpperCase().substring(0, 48), pageWidth - 14, 18, {
+    align: "right",
+  });
+
+  // Metadata Details Card
+  let currentY = 36;
+  const metaBoxHeight = metadata && metadata.length > 3 ? 26 : 20;
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(226, 232, 240);
+  doc.roundedRect(14, currentY, pageWidth - 28, metaBoxHeight, 3, 3, "FD");
+
+  doc.setFontSize(8.5);
+  doc.setTextColor(51, 65, 85);
+
+  const nowFormatted = new Date().toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const allMeta = [
+    { label: "Report Type", value: subtitle || "Official System Report" },
+    ...(event?.title ? [{ label: "Event", value: event.title }] : []),
+    ...metadata,
+    { label: "Generated", value: nowFormatted },
+    { label: "Total Records", value: `${rows.length} rows` },
+  ];
+
+  // Render metadata items in grid
+  const cols = orientation === "landscape" ? 4 : 3;
+  const colWidth = (pageWidth - 36) / cols;
+  allMeta.slice(0, 8).forEach((item, idx) => {
+    const colIdx = idx % cols;
+    const rowIdx = Math.floor(idx / cols);
+    const xPos = 18 + colIdx * colWidth;
+    const yPos = currentY + 7 + rowIdx * 8;
+
+    doc.setFont("helvetica", "bold");
+    doc.text(`${item.label}:`, xPos, yPos);
+    doc.setFont("helvetica", "normal");
+    const valStr = String(item.value || "N/A");
+    doc.text(valStr.length > 28 ? valStr.substring(0, 26) + "..." : valStr, xPos + 22, yPos);
+  });
+
+  currentY += metaBoxHeight + 6;
+
+  // Summary Metrics Bar
+  if (includeSummary && summaryCards && summaryCards.length > 0) {
+    const summaryHeight = 12;
+    doc.setFillColor(243, 232, 255);
+    doc.setDrawColor(192, 132, 252);
+    doc.roundedRect(14, currentY, pageWidth - 28, summaryHeight, 2, 2, "FD");
+
+    const cardSpacing = (pageWidth - 36) / summaryCards.length;
+    summaryCards.forEach((c, i) => {
+      const cardX = 20 + i * cardSpacing;
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      const textColor = c.color || [107, 33, 168];
+      doc.setTextColor(textColor[0], textColor[1], textColor[2]);
+      doc.text(`${c.label}: ${c.value}`, cardX, currentY + 8);
+    });
+
+    currentY += summaryHeight + 6;
+  }
+
+  // Table Data with multi-page repeated header
+  const tableData =
+    rows && rows.length > 0
+      ? rows
+      : [
+          [
+            {
+              content: "No records found matching the specified criteria.",
+              colSpan: Math.max(1, headers.length),
+              styles: { halign: "center", fontStyle: "italic", textColor: [100, 116, 139] },
+            },
+          ],
+        ];
+
+  autoTable(doc, {
+    head: [headers],
+    body: tableData,
+    startY: currentY,
+    margin: { left: 14, right: 14, bottom: 18 },
+    showHead: "everyPage",
+    theme: "grid",
+    headStyles: {
+      fillColor: [79, 70, 229],
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: orientation === "landscape" ? 8 : 7.5,
+      halign: "center",
+      valign: "middle",
+    },
+    bodyStyles: {
+      fontSize: orientation === "landscape" ? 8 : 7.5,
+      textColor: [30, 41, 59],
+      valign: "middle",
+    },
+    alternateRowStyles: {
+      fillColor: [248, 250, 252],
+    },
+  });
+
+  addPageNumbers(doc);
+
+  if (returnDoc) {
+    return doc;
+  }
+
+  const safeName =
+    filename ||
+    `EventSphere_${(title || "Report").replace(/[^a-zA-Z0-9_-]/g, "_")}_${new Date().toISOString().split("T")[0]}.pdf`;
+  doc.save(safeName);
+  return doc;
+};
+
+/**
+ * 6. VOLUNTEER ATTENDANCE / SCANS LOG PDF
+ */
+export const generateVolunteerScansPDF = ({ scans = [], volunteerName = "Volunteer", volunteerId = "", eventTitle = null }) => {
+  const headers = [
+    "S.No",
+    "Student Name",
+    "Register No",
+    "Event Title",
+    "Verified Time",
+    "Status",
+    "Verified By",
+  ];
+
+  const rows = (scans || []).map((s, idx) => [
+    idx + 1,
+    s.student_name || "Student",
+    s.registration_number || "N/A",
+    s.event_title || eventTitle || "Campus Event",
+    s.checked_in_at ? formatDate(s.checked_in_at) : "Verified Present",
+    "Present",
+    s.checked_in_by || volunteerName,
+  ]);
+
+  return generateCustomReportPDF({
+    title: "Volunteer Attendance & Scan Report",
+    subtitle: `Volunteer Desk #${volunteerId || "Staff"} · Attendance Verification`,
+    metadata: [
+      { label: "Volunteer", value: volunteerName },
+      ...(eventTitle ? [{ label: "Target Event", value: eventTitle }] : []),
+    ],
+    headers,
+    rows,
+    orientation: "portrait",
+    includeSummary: true,
+    summaryCards: [
+      { label: "Total Scans Logged", value: scans.length, color: [22, 101, 52] },
+      { label: "Status", value: "Verified Present", color: [79, 70, 229] },
+    ],
+    filename: `EventSphere_Volunteer_Scans_${new Date().toISOString().split("T")[0]}.pdf`,
+  });
+};
+

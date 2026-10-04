@@ -18,11 +18,13 @@ import {
 } from "react-icons/fi";
 import ThemeToggle from "../common/ThemeToggle.jsx";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { notificationService, searchService } from "../../api/services.js";
 import { fileUrl, initials } from "../../utils/format.js";
 
 export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = true }) {
   const { user, logout } = useAuth();
+  const { isConnected } = useRealtime();
   const navigate = useNavigate();
   const [unread, setUnread] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -33,8 +35,16 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const searchContainerRef = useRef(null);
   const debounceTimerRef = useRef(null);
+  const mobileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (mobileSearchOpen) {
+      setTimeout(() => mobileInputRef.current?.focus(), 80);
+    }
+  }, [mobileSearchOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -94,6 +104,7 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
 
   const handleSelectResult = (item) => {
     setSearchOpen(false);
+    setMobileSearchOpen(false);
     setQuery("");
     if (item.link) {
       navigate(item.link);
@@ -110,6 +121,7 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
   const handleKeyDown = (e) => {
     if (e.key === "Escape") {
       setSearchOpen(false);
+      setMobileSearchOpen(false);
     } else if (e.key === "Enter" && searchResults.length > 0) {
       e.preventDefault();
       handleSelectResult(searchResults[0]);
@@ -141,42 +153,68 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
 
   return (
     <header
+      className="app-topbar"
       style={{
         position: "sticky",
         top: 0,
-        zIndex: 50,
+        zIndex: 90,
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        gap: 16,
-        padding: "16px 24px",
+        gap: 14,
+        padding: "max(12px, env(safe-area-inset-top, 0px)) max(20px, env(safe-area-inset-right, 0px)) 12px max(20px, env(safe-area-inset-left, 0px))",
         background: "var(--bg-glass)",
-        backdropFilter: "blur(16px)",
+        backdropFilter: "blur(20px)",
+        WebkitBackdropFilter: "blur(20px)",
         borderBottom: "1px solid var(--border-color)",
+        width: "100%",
+        maxWidth: "100%",
+        boxSizing: "border-box",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 14, flex: 1 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: 1 }}>
         <button
-          className="menu-btn"
+          className="topbar-hamburger-btn"
           onClick={onMenuClick}
+          aria-label="Toggle navigation menu"
+          type="button"
+        >
+          <FiMenu size={20} />
+        </button>
+
+        {/* Real-time WebSocket Live Status Indicator */}
+        <div
+          className="live-indicator topbar-live-indicator"
+          title={isConnected ? "Live Real-Time WebSocket Connected" : "Connecting to Real-Time Service..."}
           style={{
-            display: "none",
-            background: "none",
-            border: "none",
-            fontSize: 22,
-            color: "var(--text-primary)",
+            opacity: isConnected ? 1 : 0.7,
+            borderColor: isConnected ? "rgba(16, 185, 129, 0.35)" : "rgba(245, 158, 11, 0.35)",
+            background: isConnected ? "rgba(16, 185, 129, 0.1)" : "rgba(245, 158, 11, 0.1)",
+            color: isConnected ? "#10b981" : "#f59e0b",
+            flexShrink: 0,
           }}
         >
-          <FiMenu />
-        </button>
+          <span
+            className="live-dot"
+            style={{
+              backgroundColor: isConnected ? "#10b981" : "#f59e0b",
+              boxShadow: isConnected ? "0 0 8px #10b981" : "0 0 8px #f59e0b",
+            }}
+          />
+          <span className="topbar-live-text" style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+            {isConnected ? "LIVE" : "SYNCING"}
+          </span>
+        </div>
 
         {showSearch && (
           <div
             ref={searchContainerRef}
+            className="topbar-desktop-search"
             style={{
               position: "relative",
               maxWidth: 380,
               flex: 1,
+              minWidth: 0,
             }}
           >
             <div
@@ -382,22 +420,28 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
         )}
       </div>
 
-      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+        {/* Mobile Search Toggle Button */}
+        {showSearch && (
+          <button
+            className="topbar-mobile-search-btn"
+            onClick={() => {
+              setMobileSearchOpen(true);
+              if (query.trim()) setSearchOpen(true);
+            }}
+            aria-label="Search"
+            type="button"
+          >
+            <FiSearch size={18} />
+          </button>
+        )}
+
         <ThemeToggle />
 
         <Link
           to={`${basePath}/notifications`}
-          style={{
-            position: "relative",
-            width: 40,
-            height: 40,
-            borderRadius: "50%",
-            border: "1.5px solid var(--border-color)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "var(--text-primary)",
-          }}
+          className="topbar-action-btn"
+          aria-label={`Notifications ${unread > 0 ? `(${unread} unread)` : ""}`}
         >
           <FiBell size={18} />
           {unread > 0 && (
@@ -424,18 +468,13 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
           )}
         </Link>
 
+        {/* User Profile Dropdown Button */}
         <div ref={menuRef} style={{ position: "relative" }}>
           <button
             onClick={() => setMenuOpen((o) => !o)}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "none",
-              border: "none",
-              color: "var(--text-primary)",
-              cursor: "pointer",
-            }}
+            className="topbar-user-btn"
+            aria-label="User profile menu"
+            type="button"
           >
             {user?.profile_picture ? (
               <img
@@ -446,6 +485,7 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
                   height: 36,
                   borderRadius: "50%",
                   objectFit: "cover",
+                  flexShrink: 0,
                 }}
               />
             ) : (
@@ -461,13 +501,16 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
                   justifyContent: "center",
                   fontWeight: 700,
                   fontSize: 14,
+                  flexShrink: 0,
                 }}
               >
                 {initials(user?.name)}
               </span>
             )}
-            <span style={{ fontSize: 14, fontWeight: 600 }}>{user?.name?.split(" ")[0]}</span>
-            <FiChevronDown size={14} color="var(--text-muted)" />
+            <span className="topbar-user-name" style={{ fontSize: 14, fontWeight: 600, whiteSpace: "nowrap" }}>
+              {user?.name?.split(" ")[0]}
+            </span>
+            <FiChevronDown size={14} color="var(--text-muted)" style={{ flexShrink: 0 }} />
           </button>
 
           {menuOpen && (
@@ -483,7 +526,7 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
                 background: "var(--bg-elevated)",
                 border: "1px solid var(--border-color)",
                 boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
-                zIndex: 60,
+                zIndex: 120,
               }}
             >
               <Link
@@ -541,6 +584,216 @@ export default function Topbar({ onMenuClick, basePath, onSearch, showSearch = t
           )}
         </div>
       </div>
+
+      {/* Mobile Expandable Search Bar Overlay */}
+      {mobileSearchOpen && (
+        <div
+          className="topbar-mobile-search-overlay"
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "var(--bg-elevated)",
+            backdropFilter: "blur(24px)",
+            WebkitBackdropFilter: "blur(24px)",
+            zIndex: 110,
+            display: "flex",
+            alignItems: "center",
+            padding: "max(8px, env(safe-area-inset-top, 0px)) 12px 8px",
+            gap: 10,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              background: "var(--input-bg)",
+              border: "1.5px solid var(--border-color)",
+              borderRadius: 999,
+              padding: "8px 14px",
+              flex: 1,
+              minWidth: 0,
+            }}
+          >
+            <FiSearch color="var(--text-muted)" size={16} />
+            <input
+              ref={mobileInputRef}
+              value={query}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              onFocus={() => {
+                if (query.trim()) setSearchOpen(true);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder="Search events, certs..."
+              style={{
+                border: "none",
+                background: "transparent",
+                outline: "none",
+                color: "var(--text-primary)",
+                width: "100%",
+                fontSize: 14,
+              }}
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={handleClearSearch}
+                style={{
+                  background: "none",
+                  border: "none",
+                  padding: 4,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  color: "var(--text-muted)",
+                }}
+                title="Clear search"
+              >
+                <FiX size={16} />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setMobileSearchOpen(false);
+              setSearchOpen(false);
+            }}
+            style={{
+              background: "rgba(255, 255, 255, 0.08)",
+              border: "1px solid var(--border-color)",
+              borderRadius: "50%",
+              width: 38,
+              height: 38,
+              minWidth: 38,
+              minHeight: 38,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "var(--text-primary)",
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+            aria-label="Close search"
+          >
+            <FiX size={18} />
+          </button>
+        </div>
+      )}
+
+      <style>{`
+        .topbar-hamburger-btn {
+          display: none;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          height: 40px;
+          min-width: 44px;
+          min-height: 44px;
+          border-radius: 12px;
+          background: var(--bg-elevated);
+          border: 1px solid var(--border-color);
+          color: var(--text-primary);
+          cursor: pointer;
+          transition: background 0.15s ease, border-color 0.15s ease;
+        }
+        .topbar-hamburger-btn:hover {
+          border-color: #8b5cf6;
+        }
+        .topbar-action-btn {
+          position: relative;
+          width: 40px;
+          height: 40px;
+          min-width: 44px;
+          min-height: 44px;
+          border-radius: 50%;
+          border: 1.5px solid var(--border-color);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          color: var(--text-primary);
+          background: var(--bg-elevated);
+          text-decoration: none;
+          transition: border-color 0.15s ease;
+        }
+        .topbar-action-btn:hover {
+          border-color: #8b5cf6;
+          color: #8b5cf6;
+        }
+        .topbar-user-btn {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: none;
+          border: none;
+          color: var(--text-primary);
+          cursor: pointer;
+          min-height: 44px;
+          padding: 2px 4px;
+          border-radius: 999px;
+        }
+        .topbar-mobile-search-btn {
+          display: none;
+          align-items: center;
+          justify-content: center;
+          width: 40px;
+          height: 40px;
+          min-width: 44px;
+          min-height: 44px;
+          border-radius: 50%;
+          border: 1.5px solid var(--border-color);
+          color: var(--text-primary);
+          background: var(--bg-elevated);
+          cursor: pointer;
+        }
+        @media (max-width: 900px) {
+          .topbar-hamburger-btn {
+            display: flex !important;
+          }
+        }
+        @media (max-width: 768px) {
+          .app-topbar {
+            padding: max(10px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px)) 10px max(14px, env(safe-area-inset-left, 0px)) !important;
+            gap: 10px !important;
+          }
+          .topbar-desktop-search {
+            display: none !important;
+          }
+          .topbar-mobile-search-btn {
+            display: flex !important;
+          }
+        }
+        @media (max-width: 640px) {
+          .topbar-user-name {
+            display: none !important;
+          }
+          .topbar-live-text {
+            display: none !important;
+          }
+          .topbar-live-indicator {
+            padding: 5px 8px !important;
+          }
+        }
+        @media (max-width: 380px) {
+          .app-topbar {
+            padding: max(8px, env(safe-area-inset-top, 0px)) 8px 8px !important;
+            gap: 6px !important;
+          }
+          .topbar-action-btn,
+          .topbar-mobile-search-btn {
+            width: 36px !important;
+            height: 36px !important;
+            min-width: 40px !important;
+            min-height: 40px !important;
+          }
+          .topbar-hamburger-btn {
+            width: 38px !important;
+            height: 38px !important;
+            min-width: 40px !important;
+            min-height: 40px !important;
+          }
+        }
+      `}</style>
     </header>
   );
 }

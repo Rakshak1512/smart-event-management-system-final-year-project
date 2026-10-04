@@ -38,6 +38,7 @@ def create_user(
     hashed_password: str,
     role: RoleEnum = RoleEnum.student,
     registration_number: Optional[str] = None,
+    admin_id: Optional[str] = None,
     phone: Optional[str] = None,
     department: Optional[str] = None,
     semester: Optional[str] = None,
@@ -54,6 +55,7 @@ def create_user(
         hashed_password=hashed_password,
         role=role,
         registration_number=registration_number,
+        admin_id=admin_id,
         phone=phone,
         department=department,
         semester=semester,
@@ -112,20 +114,28 @@ def get_user_by_email(email: str) -> Optional[User]:
 def get_user_by_email_and_role(email: str, role: str) -> Optional[User]:
     if not email:
         return None
-    db = get_firestore_db()
-    docs = (
-        db.collection("users")
-        .where("email", "==", email.strip().lower())
-        .where("role", "==", role.strip().lower() if isinstance(role, str) else str(role))
-        .limit(1)
-        .stream()
-    )
-    for doc in docs:
-        data = doc.to_dict() or {}
-        if "id" not in data or data["id"] is None:
-            data["id"] = int(doc.id) if doc.id.isdigit() else doc.id
-        return User.from_dict(data)
+    user = get_user_by_email(email)
+    if not user:
+        return None
+    user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
+    target_role_str = (role.value if hasattr(role, "value") else str(role)).lower().strip()
+    if user_role_str == target_role_str:
+        return user
     return None
+
+
+def update_user(user_id: int, updates: dict) -> Optional[User]:
+    if user_id is None or not updates:
+        return None
+    db = get_firestore_db()
+    doc_ref = db.collection("users").document(str(user_id))
+    doc = doc_ref.get()
+    if not doc.exists:
+        return None
+    to_update = dict(updates)
+    to_update["updated_at"] = datetime.now(timezone.utc)
+    doc_ref.update(to_update)
+    return get_user_by_id(user_id)
 
 
 def _normalize_phone_digits(p: str) -> str:
@@ -854,7 +864,13 @@ def get_my_registrations(student_id: int) -> List[Registration]:
     return regs
 
 
-def get_event_registrations(event_id: int) -> List[Registration]:
+def get_event_registrations(
+    event_id: int,
+    search: Optional[str] = None,
+    branch: Optional[str] = None,
+    status: Optional[str] = None,
+    semester: Optional[str] = None,
+) -> List[Registration]:
     db = get_firestore_db()
     try:
         eid_int = int(event_id)
@@ -881,8 +897,148 @@ def get_event_registrations(event_id: int) -> List[Registration]:
         sid = reg_data.get("student_id")
         student = get_user_by_id(sid)
         regs.append(Registration.from_dict(reg_data, event=event, student=student))
+
+    # Apply branch filter
+    if branch and branch.strip().lower() not in ("all", ""):
+        target_branch = branch.strip().lower()
+        regs = [
+            r for r in regs
+            if (r.student and (r.student.department or "").strip().lower() == target_branch)
+            or (not r.student and target_branch in ("general", "unassigned"))
+        ]
+
+    # Apply status filter
+    if status and status.strip().lower() not in ("all", ""):
+        target_status = status.strip().lower()
+        regs = [
+            r for r in regs
+            if str(r.status.value if hasattr(r.status, "value") else r.status).strip().lower() == target_status
+        ]
+
+    # Apply semester filter
+    if semester and semester.strip().lower() not in ("all", ""):
+        target_sem = semester.strip().lower()
+        regs = [
+            r for r in regs
+            if r.student and str(r.student.semester or "").strip().lower() == target_sem
+        ]
+
+    # Apply multi-field search filter
+    if search and search.strip():
+        term = search.strip().lower()
+        filtered = []
+        for r in regs:
+            s_name = (r.student.name if r.student and r.student.name else "").lower()
+            s_reg = (r.student.registration_number if r.student and r.student.registration_number else "").lower()
+            s_email = (r.student.email if r.student and r.student.email else "").lower()
+            s_dept = (r.student.department if r.student and r.student.department else "").lower()
+            s_sem = (str(r.student.semester) if r.student and r.student.semester else "").lower()
+            ticket = (r.ticket_code or "").lower()
+            st_val = str(r.status.value if hasattr(r.status, "value") else r.status).lower()
+            ev_title = (r.event.title if r.event and r.event.title else "").lower()
+
+            if (
+                term in s_name
+                or term in s_reg
+                or term in s_email
+                or term in s_dept
+                or term in s_sem
+                or term in ticket
+                or term in st_val
+                or term in ev_title
+            ):
+                filtered.append(r)
+        regs = filtered
+
     regs.sort(key=lambda r: _safe_dt_sort_key(r.registered_at), reverse=True)
     return regs
+
+
+def get_event_branch_stats(event_id: int) -> dict:
+    """
+    Dynamically computes real-time branch/department statistics directly
+    from student registrations for an event (zero hardcoded values).
+    """
+    db = get_firestore_db()
+    try:
+        eid_int = int(event_id)
+    except (ValueError, TypeError):
+        eid_int = event_id
+
+    doc_map = {}
+    for d in db.collection("registrations").where("event_id", "==", eid_int).stream():
+        doc_map[d.id] = d
+    if str(eid_int) != eid_int:
+        for d in db.collection("registrations").where("event_id", "==", str(eid_int)).stream():
+            doc_map[d.id] = d
+
+    branch_data = defaultdict(lambda: {"total": 0, "approved": 0, "pending": 0, "cancelled": 0, "attended": 0})
+    total_registrations = 0
+    approved_registrations = 0
+    pending_registrations = 0
+    cancelled_registrations = 0
+    attended_registrations = 0
+
+    for doc in doc_map.values():
+        reg_data = doc.to_dict() or {}
+        st = str(reg_data.get("status", "registered")).strip().lower()
+        sid = reg_data.get("student_id")
+        student = get_user_by_id(sid) if sid is not None else None
+        branch_name = (student.department.strip() if student and student.department else "General").upper()
+
+        total_registrations += 1
+        branch_data[branch_name]["total"] += 1
+
+        if st == "approved":
+            approved_registrations += 1
+            branch_data[branch_name]["approved"] += 1
+        elif st in ("registered", "pending"):
+            pending_registrations += 1
+            branch_data[branch_name]["pending"] += 1
+        elif st == "cancelled":
+            cancelled_registrations += 1
+            branch_data[branch_name]["cancelled"] += 1
+        elif st in ("attended", "completed"):
+            attended_registrations += 1
+            branch_data[branch_name]["attended"] += 1
+
+    branches_list = []
+    for b_name, counts in sorted(branch_data.items(), key=lambda item: item[1]["total"], reverse=True):
+        branches_list.append({
+            "branch": b_name,
+            "total": counts["total"],
+            "approved": counts["approved"],
+            "pending": counts["pending"],
+            "cancelled": counts["cancelled"],
+            "attended": counts["attended"],
+        })
+
+    return {
+        "event_id": eid_int,
+        "total_registrations": total_registrations,
+        "total_branches": len(branches_list),
+        "approved_registrations": approved_registrations,
+        "pending_registrations": pending_registrations,
+        "cancelled_registrations": cancelled_registrations,
+        "attended_registrations": attended_registrations,
+        "branches": branches_list,
+    }
+
+
+def get_event_seat_map(event_id: int) -> dict:
+    """Deprecated: Seating allocation has been replaced with open branch registrations."""
+    event = get_event_by_id(event_id)
+    return {
+        "event_id": event_id,
+        "event_title": event.title if event else "Event",
+        "total_seats": event.total_seats if event else 0,
+        "seats": [],
+    }
+
+
+def reassign_registration_seat(registration_id: int, new_seat_number: str) -> Tuple[bool, str, Optional[Registration]]:
+    """Deprecated: Seating allocation has been removed."""
+    return False, "Seat allocation has been removed from this system", None
 
 
 def cancel_registration_by_student(registration_id: int, student_id: int) -> Tuple[bool, str]:
@@ -907,7 +1063,12 @@ def cancel_registration_by_student(registration_id: int, student_id: int) -> Tup
     if curr_status == "cancelled" or curr_status == RegistrationStatus.cancelled.value:
         return False, "Registration already cancelled"
 
-    reg_ref.update({"status": RegistrationStatus.cancelled.value})
+    # Cancel registration
+    reg_ref.update({
+        "status": RegistrationStatus.cancelled.value,
+        "cancelled_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    })
 
     # Synchronize event available_seats based on live active count
     eid = reg_data.get("event_id")
@@ -945,12 +1106,16 @@ def update_registration_status(
         "updated_at": datetime.now(timezone.utc),
     }
 
+    eid = reg_data.get("event_id")
+    event = get_event_by_id(eid) if eid is not None else None
+
     if clean_new_status == "approved":
         updates["approved_at"] = datetime.now(timezone.utc)
         if action_by_user_id:
             updates["approved_by"] = action_by_user_id
         if action_by_user_name:
             updates["approved_by_name"] = action_by_user_name
+
     elif clean_new_status == "cancelled":
         updates["cancelled_at"] = datetime.now(timezone.utc)
         if action_by_user_id:
@@ -960,8 +1125,6 @@ def update_registration_status(
 
     reg_ref.update(updates)
 
-    eid = reg_data.get("event_id")
-    event = get_event_by_id(eid) if eid is not None else None
     student = get_user_by_id(reg_data.get("student_id"))
 
     if event:
@@ -977,6 +1140,7 @@ def update_registration_status(
     return updated_reg, is_cancelling, event, student
 
 
+
 # ============================================================
 # CERTIFICATES
 # ============================================================
@@ -988,20 +1152,97 @@ def create_certificate(
     event_id: Optional[int] = None,
     uploaded_by: Optional[int] = None,
     pdf_base64: Optional[str] = None,
+    student_id: Optional[int] = None,
+    student_name: Optional[str] = None,
+    department: Optional[str] = None,
+    semester: Optional[str] = None,
+    event_title: Optional[str] = None,
+    award_standing: Optional[str] = None,
+    achievement_wording: Optional[str] = None,
+    score_or_remarks: Optional[str] = None,
+    certificate_issuance_mode: Optional[str] = "upload",
+    email_notification_status: Optional[str] = None,
 ) -> Certificate:
     db = get_firestore_db()
     cert_id = get_next_id("certificates")
+
+    clean_reg = str(registration_number or "").strip()
+
+    # Look up student if metadata missing
+    student = None
+    if clean_reg and (not student_name or not department or not student_id):
+        student = get_user_by_reg_no(clean_reg)
+        if student:
+            student_id = student_id or student.id
+            student_name = student_name or student.name
+            department = department or student.department
+            semester = semester or (str(student.semester) if student.semester else "")
+
+    # Look up event if title missing
+    event = None
+    if event_id and not event_title:
+        try:
+            event = get_event_by_id(int(event_id))
+            if event:
+                event_title = event.title
+        except Exception:
+            pass
+
     cert = Certificate(
         id=cert_id,
-        registration_number=registration_number,
+        registration_number=clean_reg,
         title=title,
         file_path=file_path,
         event_id=event_id,
         uploaded_by=uploaded_by,
         uploaded_at=datetime.now(timezone.utc),
         pdf_base64=pdf_base64,
+        student_id=student_id,
+        student_name=student_name,
+        department=department,
+        semester=semester,
+        event_title=event_title,
+        award_standing=award_standing,
+        achievement_wording=achievement_wording,
+        score_or_remarks=score_or_remarks,
+        certificate_issuance_mode=certificate_issuance_mode or "upload",
+        email_notification_status=email_notification_status or "pending",
     )
     db.collection("certificates").document(str(cert_id)).set(cert.to_dict())
+
+    # Synchronize student winner record in event_results if event and standing are provided
+    if event_id and award_standing:
+        try:
+            eid_int = int(event_id)
+            existing_results = db.collection("event_results").where("event_id", "==", eid_int).stream()
+            matched_res_doc = None
+            for d in existing_results:
+                rdata = d.to_dict() or {}
+                if (rdata.get("registration_number") or "").strip().lower() == clean_reg.lower():
+                    matched_res_doc = d
+                    break
+
+            if matched_res_doc:
+                matched_res_doc.reference.update({
+                    "position": award_standing,
+                    "score_or_remarks": score_or_remarks,
+                    "certificate_id": cert_id,
+                    "certificate_title": title,
+                    "certificate_file_path": file_path,
+                    "updated_at": datetime.now(timezone.utc),
+                })
+            else:
+                create_event_result(
+                    event_id=eid_int,
+                    registration_number=clean_reg,
+                    position=award_standing,
+                    declared_by=uploaded_by or 0,
+                    score_or_remarks=score_or_remarks,
+                    certificate_id=cert_id,
+                )
+        except Exception as e:
+            logger.error(f"Error syncing certificate to event_results: {e}")
+
     return cert
 
 
@@ -1015,7 +1256,31 @@ def get_certificate_by_id(certificate_id: int) -> Optional[Certificate]:
     data = doc.to_dict() or {}
     if "id" not in data or data["id"] is None:
         data["id"] = int(certificate_id)
-    return Certificate.from_dict(data)
+    cert = Certificate.from_dict(data)
+    _enrich_certificate(cert)
+    return cert
+
+
+def _enrich_certificate(cert: Certificate):
+    """Fills in missing student name or event title for legacy certificates."""
+    if not cert:
+        return
+    if not cert.student_name and cert.registration_number:
+        try:
+            st = get_user_by_reg_no(cert.registration_number)
+            if st:
+                cert.student_name = st.name
+                cert.department = cert.department or st.department
+                cert.student_id = cert.student_id or st.id
+        except Exception:
+            pass
+    if not cert.event_title and cert.event_id:
+        try:
+            ev = get_event_by_id(cert.event_id)
+            if ev:
+                cert.event_title = ev.title
+        except Exception:
+            pass
 
 
 def get_certificates_by_registration_number(registration_number: str) -> List[Certificate]:
@@ -1028,6 +1293,8 @@ def get_certificates_by_registration_number(registration_number: str) -> List[Ce
         .stream()
     )
     certs = [Certificate.from_dict(d.to_dict()) for d in docs]
+    for c in certs:
+        _enrich_certificate(c)
     certs.sort(key=lambda c: c.uploaded_at, reverse=True)
     return certs
 
@@ -1040,6 +1307,8 @@ def get_certificates_by_faculty(uploaded_by: int) -> List[Certificate]:
         .stream()
     )
     certs = [Certificate.from_dict(d.to_dict()) for d in docs]
+    for c in certs:
+        _enrich_certificate(c)
     certs.sort(key=lambda c: c.uploaded_at, reverse=True)
     return certs
 
@@ -1050,7 +1319,8 @@ def update_certificate(certificate_id: int, updates: dict) -> Optional[Certifica
     doc = doc_ref.get()
     if not doc.exists:
         return None
-    doc_ref.update(updates)
+    clean_updates = {k: v for k, v in updates.items() if v is not None}
+    doc_ref.update(clean_updates)
     return get_certificate_by_id(certificate_id)
 
 
@@ -1791,6 +2061,7 @@ def get_faculty_analytics(faculty_id: int) -> dict:
     event_performance = []
     dept_participation = defaultdict(int)
 
+    student_cache = {}
     # Collect registrations across faculty events
     for e in events:
         docs = db.collection("registrations").where("event_id", "==", int(e.id)).stream()
@@ -1828,17 +2099,17 @@ def get_faculty_analytics(faculty_id: int) -> dict:
         month_key = e.created_at.strftime("%Y-%m") if e.created_at else "unknown"
         monthly[month_key] += 1
 
-        # Look up student departments for department participation
-        for r in active_regs[:20]:
-            st = get_user_by_id(r.get("student_id"))
-            if st and st.department:
-                dept_participation[st.department.upper()] += 1
+        # Look up student departments for dynamic department participation
+        for r in active_regs:
+            sid = r.get("student_id")
+            if sid not in student_cache:
+                student_cache[sid] = get_user_by_id(sid)
+            st = student_cache[sid]
+            dept_name = (st.department.strip().upper() if st and st.department else "GENERAL")
+            dept_participation[dept_name] += 1
 
     top_events.sort(key=lambda x: x["registrations"], reverse=True)
     event_performance.sort(key=lambda x: x["score"], reverse=True)
-
-    if not dept_participation:
-        dept_participation = {"BCA": 18, "BBA": 12, "BCOM": 15, "BSC": 9, "MCA": 8}
 
     total_certificates_issued = len(get_certificates_by_faculty(faculty_id))
     monthly_list = [{"month": k, "count": v} for k, v in sorted(monthly.items())]
@@ -2108,7 +2379,6 @@ def verify_ticket_for_volunteer(
         "registration_type": event.registration_type or "individual",
         "ticket_code": matched_reg.get("ticket_code"),
         "status": matched_reg.get("status", "registered"),
-        "seat_number": matched_reg.get("seat_number"),
         "team_name": matched_reg.get("team_name"),
         "already_attended": is_already_attended,
         "checked_in_at": chk_time_str,

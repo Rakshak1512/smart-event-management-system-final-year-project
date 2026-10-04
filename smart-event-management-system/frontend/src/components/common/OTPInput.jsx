@@ -227,8 +227,8 @@ export default function OTPInput({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          gap: "10px",
-          padding: "8px 4px",
+          gap: "clamp(4px, 2vw, 10px)",
+          padding: "8px 2px",
           borderRadius: "16px",
           userSelect: "none",
         }}
@@ -243,8 +243,9 @@ export default function OTPInput({
               style={{
                 position: "relative",
                 flex: 1,
-                minWidth: "42px",
-                maxWidth: "64px",
+                minWidth: 0,
+                width: "100%",
+                maxWidth: "60px",
                 aspectRatio: "1 / 1.15",
                 display: "flex",
                 alignItems: "center",
@@ -473,6 +474,14 @@ export default function OTPInput({
           }
           .otp-glass-box input {
             font-size: 20px !important;
+          }
+        }
+        @media (max-width: 360px) {
+          .otp-boxes-grid {
+            gap: 4px !important;
+          }
+          .otp-glass-box input {
+            font-size: 18px !important;
           }
         }
       `}</style>

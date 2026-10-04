@@ -24,6 +24,7 @@ import { SkeletonCard } from "../../components/ui/Loader.jsx";
 import Modal from "../../components/ui/Modal.jsx";
 import { eventService, registrationService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { fileUrl, formatDate } from "../../utils/format.js";
 
 export default function EventDetail({ embedded = false }) {
@@ -45,6 +46,37 @@ export default function EventDetail({ embedded = false }) {
   const [searchError, setSearchError] = useState("");
   const [teamMembers, setTeamMembers] = useState([]); // [{ registration_number, name, department, semester }]
   const [teamSubmitting, setTeamSubmitting] = useState(false);
+
+  const { subscribeToEvent, addListener } = useRealtime();
+
+  useEffect(() => {
+    if (id) {
+      subscribeToEvent(id);
+    }
+  }, [id, subscribeToEvent]);
+
+  // Real-time capacity and registration synchronization
+  useEffect(() => {
+    if (!id) return;
+    const remove = addListener((msg) => {
+      if (!msg.event_id || String(msg.event_id) === String(id)) {
+        eventService
+          .get(id)
+          .then(({ data }) => setEvent(data))
+          .catch(() => {});
+        if (user && user.role === "student") {
+          registrationService
+            .my()
+            .then(({ data: myRegs }) => {
+              const found = myRegs.find((r) => r.event_id === Number(id) && r.status !== "cancelled");
+              if (found) setRegistration(found);
+            })
+            .catch(() => {});
+        }
+      }
+    });
+    return () => remove();
+  }, [id, addListener, user]);
 
   useEffect(() => {
     setLoading(true);

@@ -9,16 +9,18 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { analyticsService, eventService, registrationService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate, statusBadgeClass } from "../../utils/format.js";
 
 export default function StudentDashboard() {
   const { user } = useAuth();
+  const { addListener } = useRealtime();
   const [analytics, setAnalytics] = useState(null);
   const [upcoming, setUpcoming] = useState([]);
   const [myRegs, setMyRegs] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadData = () => {
     Promise.all([
       analyticsService.student().then(({ data }) => data).catch(() => null),
       eventService.list({ page: 1, page_size: 4, sort_by: "event_date", sort_order: "asc" }).then(({ data }) => data.items || []).catch(() => []),
@@ -29,7 +31,27 @@ export default function StudentDashboard() {
       setMyRegs(regs.slice(0, 4));
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
+
+  // Real-time synchronization for student dashboard counters and registrations
+  useEffect(() => {
+    const remove = addListener((msg) => {
+      if (
+        msg.type === "REGISTRATION_CREATED" ||
+        msg.type === "REGISTRATION_STATUS_CHANGED" ||
+        msg.type === "ATTENDANCE_CHECKED_IN" ||
+        msg.type === "REGISTRATION_CANCELLED" ||
+        msg.type === "EVENT_UPDATED"
+      ) {
+        loadData();
+      }
+    });
+    return () => remove();
+  }, [addListener]);
 
   const today = new Date().toDateString();
   const todaysEvents = upcoming.filter((e) => new Date(e.event_date).toDateString() === today);
@@ -38,17 +60,9 @@ export default function StudentDashboard() {
     <PageTransition>
       {/* Welcome Hero Banner */}
       <div
-        className="glass-card float-card"
+        className="glass-card welcome-banner"
         style={{
-          padding: "30px 32px",
-          marginBottom: 26,
           background: "var(--gradient-soft)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 18,
-          borderRadius: "22px",
           boxShadow: "0 10px 30px rgba(139, 92, 246, 0.08)",
         }}
       >
@@ -68,14 +82,14 @@ export default function StudentDashboard() {
           >
             <FiCheckCircle size={14} /> Student Dashboard
           </span>
-          <h1 style={{ fontSize: "clamp(22px, 3.5vw, 28px)", marginBottom: 6 }}>
+          <h1 style={{ fontSize: "clamp(20px, 3.5vw, 28px)", marginBottom: 6 }}>
             Welcome back, {user?.name?.split(" ")[0]} 👋
           </h1>
           <p style={{ color: "var(--text-secondary)", fontSize: 14.5 }}>
             {user?.department} {user?.semester && `· Semester ${user.semester}`} {user?.registration_number && `· ${user.registration_number}`}
           </p>
         </div>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div className="btn-group" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <Link to="/student/events" className="btn btn-primary btn-sm">
             Browse Events <FiArrowRight />
           </Link>

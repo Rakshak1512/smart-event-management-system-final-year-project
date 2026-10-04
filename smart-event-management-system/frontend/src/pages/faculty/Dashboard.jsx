@@ -7,15 +7,17 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { analyticsService, eventService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate } from "../../utils/format.js";
 
 export default function FacultyDashboard() {
   const { user } = useAuth();
+  const { addListener } = useRealtime();
   const [analytics, setAnalytics] = useState(null);
   const [recentEvents, setRecentEvents] = useState([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const loadData = () => {
     Promise.all([
       analyticsService.faculty().then(({ data }) => data).catch(() => null),
       eventService.list({ page: 1, page_size: 5, sort_by: "created_at", sort_order: "desc" }).then(({ data }) => data.items || []).catch(() => []),
@@ -24,23 +26,35 @@ export default function FacultyDashboard() {
       setRecentEvents(ev);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    loadData();
   }, []);
+
+  // Real-time synchronization for faculty dashboard counters
+  useEffect(() => {
+    const remove = addListener((msg) => {
+      if (
+        msg.type === "REGISTRATION_CREATED" ||
+        msg.type === "REGISTRATION_STATUS_CHANGED" ||
+        msg.type === "ATTENDANCE_CHECKED_IN" ||
+        msg.type === "REGISTRATION_CANCELLED" ||
+        msg.type === "EVENT_UPDATED"
+      ) {
+        loadData();
+      }
+    });
+    return () => remove();
+  }, [addListener]);
 
   return (
     <PageTransition>
       {/* Welcome Banner */}
       <div
-        className="glass-card float-card"
+        className="glass-card welcome-banner"
         style={{
-          padding: "30px 32px",
-          marginBottom: 26,
           background: "var(--gradient-soft)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 18,
-          borderRadius: "22px",
           boxShadow: "0 10px 30px rgba(139, 92, 246, 0.08)",
         }}
       >
@@ -60,12 +74,12 @@ export default function FacultyDashboard() {
           >
             <FiCheckCircle size={14} /> Faculty & Organizer Portal
           </span>
-          <h1 style={{ fontSize: "clamp(22px, 3.5vw, 28px)", marginBottom: 6 }}>
+          <h1 style={{ fontSize: "clamp(20px, 3.5vw, 28px)", marginBottom: 6 }}>
             Welcome, {user?.name?.split(" ")[0]} 👋
           </h1>
           <p style={{ color: "var(--text-secondary)", fontSize: 14.5 }}>{user?.department || "Department Administrator"}</p>
         </div>
-        <div style={{ display: "flex", gap: 12 }}>
+        <div className="btn-group" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
           <Link to="/faculty/events" className="btn btn-primary btn-sm">
             <FiPlusSquare /> Manage Events
           </Link>
@@ -103,7 +117,7 @@ export default function FacultyDashboard() {
         </Link>
       </div>
 
-      <div className="glass-card table-wrap" style={{ borderRadius: "18px", overflow: "hidden" }}>
+      <div className="glass-card table-wrap" style={{ borderRadius: "18px" }}>
         <table className="data-table">
           <thead>
             <tr>
@@ -111,7 +125,7 @@ export default function FacultyDashboard() {
               <th>Category</th>
               <th>Event Date</th>
               <th>Venue</th>
-              <th>Seat Fill</th>
+              <th>Registrations</th>
             </tr>
           </thead>
           <tbody>
@@ -124,12 +138,12 @@ export default function FacultyDashboard() {
             ) : (
               recentEvents.map((ev) => (
                 <tr key={ev.id}>
-                  <td style={{ fontWeight: 600, color: "var(--text-primary)" }}>{ev.title}</td>
+                  <td style={{ fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap" }}>{ev.title}</td>
                   <td>
                     <span className="badge badge-info">{ev.category || "General"}</span>
                   </td>
-                  <td style={{ color: "var(--text-secondary)" }}>{formatDate(ev.event_date)}</td>
-                  <td style={{ color: "var(--text-secondary)" }}>{ev.venue}</td>
+                  <td style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{formatDate(ev.event_date)}</td>
+                  <td style={{ color: "var(--text-secondary)", whiteSpace: "nowrap" }}>{ev.venue}</td>
                   <td>
                     <span style={{ fontWeight: 600, color: ev.available_seats <= 0 ? "var(--danger)" : "var(--success)" }}>
                       {ev.total_seats - ev.available_seats} / {ev.total_seats}
@@ -141,6 +155,24 @@ export default function FacultyDashboard() {
           </tbody>
         </table>
       </div>
+
+      <style>{`
+        @media (max-width: 640px) {
+          .welcome-banner .btn-group {
+            width: 100%;
+          }
+          .welcome-banner .btn-group a {
+            flex: 1 1 calc(50% - 6px);
+            text-align: center;
+            justify-content: center;
+          }
+        }
+        @media (max-width: 420px) {
+          .welcome-banner .btn-group a {
+            flex: 1 1 100%;
+          }
+        }
+      `}</style>
     </PageTransition>
   );
 }

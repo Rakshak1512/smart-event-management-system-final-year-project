@@ -14,6 +14,7 @@ import {
   FiRefreshCw,
   FiCheckCircle,
   FiFilter,
+  FiX,
 } from "react-icons/fi";
 import { motion } from "framer-motion";
 import Modal from "../../components/ui/Modal.jsx";
@@ -22,7 +23,7 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { adminService, eventService } from "../../api/services.js";
 import { formatDate } from "../../utils/format.js";
-import { exportToCSV } from "../../utils/exportUtils.js";
+import { generateCustomReportPDF } from "../../utils/pdfReportGenerator.js";
 
 const PRIORITY_COLORS = {
   urgent: { bg: "rgba(239, 68, 68, 0.15)", text: "#ef4444", border: "rgba(239, 68, 68, 0.3)" },
@@ -176,42 +177,69 @@ export default function AdminAssignments() {
       t.title?.toLowerCase().includes(q) ||
       t.description?.toLowerCase().includes(q) ||
       t.faculty_name?.toLowerCase().includes(q) ||
+      t.faculty_email?.toLowerCase().includes(q) ||
+      t.faculty_department?.toLowerCase().includes(q) ||
+      t.priority?.toLowerCase().includes(q) ||
       t.event_title?.toLowerCase().includes(q)
     );
   });
 
-  const handleExportCSV = () => {
-    const filename = "faculty-assignments.csv";
-    const headers = [
-      "Task ID",
-      "Task Title",
-      "Assigned Faculty",
-      "Faculty Email",
-      "Department",
-      "Priority",
-      "Status",
-      "Deadline",
-      "Associated Event",
-      "Assigned By",
-      "Created Date",
+  const handleExportPDF = () => {
+    if (!assignments || assignments.length === 0) {
+      toast.error("No assignment records available to export");
+      return;
+    }
+
+    const filename = `EventSphere_Faculty_Assignments_${new Date().toISOString().split("T")[0]}.pdf`;
+    const pendingCount = assignments.filter((t) => t.status === "pending").length;
+    const progressCount = assignments.filter((t) => t.status === "in_progress").length;
+    const completedCount = assignments.filter((t) => t.status === "completed").length;
+
+    const reportColumns = [
+      { key: "taskId", header: "Task ID" },
+      { key: "title", header: "Directive Title" },
+      { key: "faculty", header: "Assigned Faculty" },
+      { key: "department", header: "Department" },
+      { key: "priority", header: "Priority" },
+      { key: "status", header: "Status" },
+      { key: "deadline", header: "Deadline" },
+      { key: "event", header: "Event Context" },
+      { key: "assignedBy", header: "Assigned By" },
     ];
 
-    const rows = assignments.map((t) => [
-      `TASK-${t.id}`,
-      t.title,
-      t.faculty_name,
-      t.faculty_email,
-      t.faculty_department || "General",
-      t.priority.toUpperCase(),
-      t.status.toUpperCase(),
-      t.deadline || "None",
-      t.event_title || "N/A",
-      t.assigned_by_name || "Admin",
-      formatDate(t.created_at),
-    ]);
+    const reportData = assignments.map((t) => ({
+      taskId: `TASK-${t.id}`,
+      title: t.title || "N/A",
+      faculty: t.faculty_name || "N/A",
+      department: t.faculty_department || "General",
+      priority: (t.priority || "medium").toUpperCase(),
+      status: (t.status || "pending").replace("_", " ").toUpperCase(),
+      deadline: t.deadline || "None",
+      event: t.event_title || "General",
+      assignedBy: t.assigned_by_name || "Admin",
+    }));
 
-    exportToCSV(filename, headers, rows);
-    toast.success(`Exported ${rows.length} assignment records to CSV`);
+    generateCustomReportPDF({
+      title: "Faculty Assignments & Institutional Directives",
+      subtitle: "Official Task Delegation, Deliverable Tracking & Completion Audit",
+      filename,
+      orientation: "landscape",
+      metadata: [
+        { label: "Generated Date", value: new Date().toLocaleDateString() },
+        { label: "Total Tasks", value: `${assignments.length} Directives` },
+        { label: "Completed", value: `${completedCount} Delivered` },
+      ],
+      summaryMetrics: [
+        { label: "Total Tasks", value: assignments.length },
+        { label: "Pending", value: pendingCount },
+        { label: "In Progress", value: progressCount },
+        { label: "Completed", value: completedCount },
+      ],
+      columns: reportColumns,
+      data: reportData,
+    });
+
+    toast.success(`Exported ${assignments.length} assignments to PDF`);
   };
 
   return (
@@ -224,8 +252,8 @@ export default function AdminAssignments() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button className="btn btn-outline btn-sm" onClick={handleExportCSV}>
-            <FiDownload size={14} /> Export Assignments CSV
+          <button className="btn btn-outline btn-sm" onClick={handleExportPDF}>
+            <FiDownload size={14} /> Download Assignments PDF
           </button>
           <button className="btn btn-primary btn-sm" onClick={() => openCreateModal("")}>
             <FiPlus size={14} /> Assign Work
@@ -289,10 +317,10 @@ export default function AdminAssignments() {
           </select>
         </div>
 
-        <div style={{ position: "relative", minWidth: 240 }}>
+        <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
           <input
             className="form-input"
-            style={{ padding: "7px 12px 7px 32px", fontSize: 13 }}
+            style={{ padding: "7px 32px 7px 32px", fontSize: 13 }}
             placeholder="Search assignments..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -305,8 +333,29 @@ export default function AdminAssignments() {
               top: "50%",
               transform: "translateY(-50%)",
               color: "var(--text-muted)",
+              pointerEvents: "none",
             }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              style={{
+                position: "absolute",
+                right: 10,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: 2,
+              }}
+              title="Clear search"
+            >
+              <FiX size={14} />
+            </button>
+          )}
         </div>
       </div>
 

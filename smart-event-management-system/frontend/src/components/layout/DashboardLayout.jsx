@@ -85,46 +85,53 @@ export default function DashboardLayout({ role }) {
     <div
       style={{
         display: "flex",
-        minHeight: "100vh",
+        minHeight: "100dvh",
         background: "var(--bg-base)",
         position: "relative",
-        overflowX: "hidden",
+        width: "100%",
+        maxWidth: "100%",
+        overflowX: "clip",
       }}
     >
-      {/* Ambient Lighting Orbs */}
+      {/* Ambient Lighting Orbs - Confined to non-scrolling container */}
       <div
         aria-hidden
         style={{
           position: "fixed",
-          top: -100,
-          left: 100,
-          width: 450,
-          height: 450,
-          borderRadius: "50%",
-          background: "var(--gradient-primary)",
-          opacity: 0.08,
-          filter: "blur(90px)",
+          inset: 0,
+          overflow: "hidden",
           pointerEvents: "none",
           zIndex: 0,
         }}
-      />
-      <div
-        aria-hidden
-        style={{
-          position: "fixed",
-          bottom: -100,
-          right: 50,
-          width: 500,
-          height: 500,
-          borderRadius: "50%",
-          background: "rgba(99, 102, 241, 0.06)",
-          filter: "blur(100px)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
+      >
+        <div
+          style={{
+            position: "absolute",
+            top: -100,
+            left: 100,
+            width: 450,
+            height: 450,
+            borderRadius: "50%",
+            background: "var(--gradient-primary)",
+            opacity: 0.08,
+            filter: "blur(90px)",
+          }}
+        />
+        <div
+          style={{
+            position: "absolute",
+            bottom: -100,
+            right: 50,
+            width: 500,
+            height: 500,
+            borderRadius: "50%",
+            background: "rgba(99, 102, 241, 0.06)",
+            filter: "blur(100px)",
+          }}
+        />
+      </div>
 
-      {/* Floating Glass Sidebar */}
+      {/* Glass Sidebar */}
       <Sidebar
         items={items}
         role={role}
@@ -137,6 +144,8 @@ export default function DashboardLayout({ role }) {
         style={{
           flex: 1,
           minWidth: 0,
+          width: "100%",
+          maxWidth: "100%",
           display: "flex",
           flexDirection: "column",
           position: "relative",
@@ -144,15 +153,7 @@ export default function DashboardLayout({ role }) {
         }}
       >
         <Topbar onMenuClick={() => setSidebarOpen(true)} basePath={basePath} />
-        <main
-          style={{
-            padding: "24px 28px 40px",
-            maxWidth: 1400,
-            width: "100%",
-            margin: "0 auto",
-            flex: 1,
-          }}
-        >
+        <main className="dashboard-main">
           <Outlet />
         </main>
       </div>

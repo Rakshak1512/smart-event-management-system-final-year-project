@@ -10,6 +10,7 @@ import {
   FiUser,
   FiLayers,
   FiSearch,
+  FiX,
 } from "react-icons/fi";
 import { motion } from "framer-motion";
 import EmptyState from "../../components/ui/EmptyState.jsx";
@@ -289,10 +290,10 @@ export default function AssignedTasks() {
         </div>
 
         {tasks.length > 0 && (
-          <div style={{ position: "relative", minWidth: 260 }}>
+          <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
             <input
               className="form-input"
-              style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+              style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
               placeholder="Search tasks by title, priority, deadline..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -305,8 +306,29 @@ export default function AssignedTasks() {
                 top: "50%",
                 transform: "translateY(-50%)",
                 color: "var(--text-muted)",
+                pointerEvents: "none",
               }}
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                }}
+                title="Clear search"
+              >
+                <FiX size={14} />
+              </button>
+            )}
           </div>
         )}
       </div>

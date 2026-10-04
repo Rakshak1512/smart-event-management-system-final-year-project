@@ -359,7 +359,7 @@ export default function StudentAnalytics() {
 
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "auto" }}>
                   <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                    {ev.available_seats} seats left
+                    {ev.available_seats} spots left
                   </span>
                   <Link to={`/events/${ev.id}`} className="btn btn-primary btn-sm">
                     View Event

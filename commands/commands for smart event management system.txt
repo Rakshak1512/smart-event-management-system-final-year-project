@@ -1,0 +1,16 @@
+backend:
+
+cd c:\Users\raksh\project\EventSphere_Final\smart-event-management-system\backend
+.\venv\Scripts\python.exe run_server.py
+
+
+
+frontend:
+
+cd c:\Users\raksh\project\EventSphere_Final\smart-event-management-system\frontend
+npm install
+npm run dev -- --host 0.0.0.0
+
+
+cloude fare:
+cloudflared tunnel --url http://localhost:5173

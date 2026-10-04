@@ -18,6 +18,7 @@ def generate_registration_slip_pdf(
     event_time: str,
     ticket_code: str,
     qr_code_path: str = None,
+    **kwargs,
 ) -> bytes:
     buffer = io.BytesIO()
     c = canvas.Canvas(buffer, pagesize=A5)
@@ -42,6 +43,7 @@ def generate_registration_slip_pdf(
         ("Time", event_time),
         ("Ticket Code", ticket_code),
     ]
+
 
     for label, value in fields:
         c.setFont("Helvetica-Bold", 10.5)
@@ -91,6 +93,9 @@ def generate_certificate_pdf(
     semester: str = "",
     issuer_name: str = "Faculty Coordinator",
     college_name: str = "EventSphere",
+    title: str = None,
+    achievement_wording: str = None,
+    score_or_remarks: str = None,
 ) -> bytes:
     """
     Generates a high-resolution, certificate in Landscape A4 format.
@@ -100,8 +105,9 @@ def generate_certificate_pdf(
     c = canvas.Canvas(buffer, pagesize=landscape(A4))
     width, height = landscape(A4)
 
-    is_winner = any(w in (position or "").lower() for w in ["winner", "1st", "first", "champion"])
-    is_runner = any(w in (position or "").lower() for w in ["runner", "2nd", "3rd", "second", "third", "consolation", "special"])
+    effective_pos = achievement_wording or position or ""
+    is_winner = any(w in effective_pos.lower() for w in ["winner", "1st", "first", "champion"])
+    is_runner = any(w in effective_pos.lower() for w in ["runner", "2nd", "3rd", "second", "third", "consolation", "special", "innovation", "presentation"])
 
     primary_color = HexColor("#f59e0b") if is_winner else HexColor("#6366f1") if is_runner else HexColor("#4f46e5")
     border_sub_color = HexColor("#fde68a") if is_winner else HexColor("#c7d2fe")
@@ -125,14 +131,16 @@ def generate_certificate_pdf(
 
     # Title
     main_title = (
-        "CERTIFICATE OF ACHIEVEMENT"
+        title.upper()
+        if title and len(title) < 40 and "certificate" in title.lower()
+        else "CERTIFICATE OF ACHIEVEMENT"
         if is_winner
         else "CERTIFICATE OF MERIT"
         if is_runner
         else "CERTIFICATE OF PARTICIPATION"
     )
     c.setFillColor(HexColor("#1e1b4b"))
-    c.setFont("Helvetica-Bold", 24)
+    c.setFont("Helvetica-Bold", 23)
     c.drawCentredString(width / 2.0, height - 38 * mm, main_title)
 
     c.setFillColor(HexColor("#64748b"))
@@ -159,29 +167,38 @@ def generate_certificate_pdf(
         c.drawCentredString(width / 2.0, height - 68 * mm, " · ".join(sub_details))
 
     # Achievement / Position badge text
-    if position and position.lower() != "certificate of participation":
+    display_achievement = achievement_wording or position
+    if display_achievement and display_achievement.lower() != "certificate of participation":
         c.setFillColor(primary_color)
         c.setFont("Helvetica-Bold", 15)
         c.drawCentredString(
             width / 2.0,
             height - 78 * mm,
-            f"— for securing {position.upper()} —",
+            f"— for securing {display_achievement.upper()} —",
         )
         c.setFillColor(HexColor("#334155"))
         c.setFont("Helvetica", 12)
-        c.drawCentredString(width / 2.0, height - 88 * mm, f'in the event "{event_title}"')
+        ev_title = event_title or "Campus Event"
+        c.drawCentredString(width / 2.0, height - 87 * mm, f'in the event "{ev_title}"')
+
+        # Optional Score or Remarks
+        if score_or_remarks:
+            c.setFillColor(HexColor("#6b7280"))
+            c.setFont("Helvetica-Oblique", 10)
+            c.drawCentredString(width / 2.0, height - 94 * mm, f"Performance: {score_or_remarks}")
     else:
         c.setFillColor(HexColor("#334155"))
         c.setFont("Helvetica", 12)
+        ev_title = event_title or "Campus Event"
         c.drawCentredString(
             width / 2.0,
             height - 80 * mm,
-            f'for active participation and successful completion of "{event_title}"',
+            f'for active participation and successful completion of "{ev_title}"',
         )
 
     c.setFillColor(HexColor("#64748b"))
     c.setFont("Helvetica", 10.5)
-    c.drawCentredString(width / 2.0, height - 98 * mm, f"Conducted on {event_date or 'Campus'}")
+    c.drawCentredString(width / 2.0, height - 100 * mm, f"Conducted on {event_date or 'Campus'}")
 
     # Signatures & Verification section
     # Left: Date & ID

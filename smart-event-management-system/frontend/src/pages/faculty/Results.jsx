@@ -41,16 +41,9 @@ import {
   generateResultsReportPDF,
   generateWinnersReportPDF,
 } from "../../utils/pdfReportGenerator.js";
-
-const PRESET_POSITIONS = [
-  { label: "🥇 1st Place (Winner)", value: "1st Place", certText: "First Place" },
-  { label: "🥈 2nd Place (Runner-up)", value: "2nd Place", certText: "Second Place" },
-  { label: "🥉 3rd Place (Second Runner-up)", value: "3rd Place", certText: "Third Place" },
-  { label: "⭐ Special Mention", value: "Special Mention", certText: "Special Mention" },
-  { label: "💡 Best Innovation", value: "Best Innovation", certText: "Best Innovation" },
-  { label: "🎯 Best Presentation", value: "Best Presentation", certText: "Best Presentation" },
-  { label: "🎖️ Certificate of Merit", value: "Certificate of Merit", certText: "Merit & Achievement" },
-];
+import AwardStandingSelector from "../../components/certificate/AwardStandingSelector.jsx";
+import StudentDetailsCard from "../../components/certificate/StudentDetailsCard.jsx";
+import { AWARD_STANDINGS, AWARD_STANDINGS as PRESET_POSITIONS } from "../../components/certificate/certificateConstants.js";
 
 export default function FacultyResults() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -548,11 +541,11 @@ export default function FacultyResults() {
             </div>
           </div>
 
-          {/* Search bar */}
+          {/* Search bar with clear button */}
           <div style={{ position: "relative", maxWidth: 420, marginBottom: 24 }}>
             <input
               className="form-input"
-              style={{ padding: "10px 14px 10px 38px", fontSize: 13.5 }}
+              style={{ padding: "10px 36px 10px 38px", fontSize: 13.5 }}
               placeholder="Search events by title, category, venue..."
               value={eventSearch}
               onChange={(e) => setEventSearch(e.target.value)}
@@ -567,6 +560,26 @@ export default function FacultyResults() {
                 color: "var(--text-muted)",
               }}
             />
+            {eventSearch && (
+              <button
+                type="button"
+                onClick={() => setEventSearch("")}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                }}
+                title="Clear search"
+              >
+                <FiX size={15} />
+              </button>
+            )}
           </div>
 
           {/* Error State */}
@@ -998,10 +1011,10 @@ export default function FacultyResults() {
                 </p>
               </div>
 
-              <div style={{ position: "relative", minWidth: 260 }}>
+              <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
                 <input
                   className="form-input"
-                  style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+                  style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
                   placeholder="Search attended students..."
                   value={attendeeSearch}
                   onChange={(e) => setAttendeeSearch(e.target.value)}
@@ -1014,12 +1027,33 @@ export default function FacultyResults() {
                     top: "50%",
                     transform: "translateY(-50%)",
                     color: "var(--text-muted)",
+                    pointerEvents: "none",
                   }}
                 />
+                {attendeeSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setAttendeeSearch("")}
+                    style={{
+                      position: "absolute",
+                      right: 12,
+                      top: "50%",
+                      transform: "translateY(-50%)",
+                      background: "none",
+                      border: "none",
+                      color: "var(--text-muted)",
+                      cursor: "pointer",
+                      padding: 2,
+                    }}
+                    title="Clear search"
+                  >
+                    <FiX size={14} />
+                  </button>
+                )}
               </div>
             </div>
 
-            <div className="glass-card table-wrap" style={{ borderRadius: "20px", overflow: "hidden" }}>
+            <div className="glass-card table-wrap" style={{ borderRadius: "20px" }}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1208,69 +1242,21 @@ export default function FacultyResults() {
       >
         <form onSubmit={handleSaveWinnerAndCertificate}>
           {/* Pre-filled Student Metadata Display */}
-          <div
-            style={{
-              background: "var(--bg-glass)",
-              padding: "14px 18px",
-              borderRadius: "14px",
-              marginBottom: 18,
-              border: "1px solid var(--border-color)",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 10,
-              fontSize: 13,
+          <StudentDetailsCard
+            student={{
+              name: form.student_name || "Student",
+              registration_number: form.registration_number,
+              department: form.department,
+              semester: form.semester,
+              email: selectedStudent?.student?.email || "",
             }}
-          >
-            <div>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, display: "block" }}>Student Name</span>
-              <strong>{form.student_name || "Student"}</strong>
-            </div>
-            <div>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, display: "block" }}>Register Number</span>
-              <strong style={{ fontFamily: "monospace", color: "#a5b4fc" }}>{form.registration_number}</strong>
-            </div>
-            <div>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, display: "block" }}>Branch / Department</span>
-              <span>{form.department || "General"}</span>
-            </div>
-            <div>
-              <span style={{ color: "var(--text-muted)", fontSize: 11.5, display: "block" }}>Class / Semester</span>
-              <span>{form.semester ? `Semester ${form.semester}` : "—"}</span>
-            </div>
-          </div>
+          />
 
-          <div className="form-group">
-            <label className="form-label">Position / Award Standing</label>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-              {PRESET_POSITIONS.map((preset) => (
-                <button
-                  key={preset.value}
-                  type="button"
-                  onClick={() => handlePositionChange(preset.value)}
-                  style={{
-                    padding: "8px 12px",
-                    borderRadius: 10,
-                    fontSize: 12.5,
-                    fontWeight: 600,
-                    textAlign: "left",
-                    cursor: "pointer",
-                    border: form.position === preset.value ? "1.5px solid #8b5cf6" : "1px solid var(--border-color)",
-                    background: form.position === preset.value ? "rgba(139, 92, 246, 0.18)" : "var(--bg-elevated)",
-                    color: form.position === preset.value ? "var(--text-primary)" : "var(--text-secondary)",
-                  }}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-            <input
-              className="form-input"
-              value={form.position}
-              onChange={(e) => setForm((f) => ({ ...f, position: e.target.value }))}
-              placeholder="Or enter custom position (e.g. 1st Place, Runner-up)"
-              required
-            />
-          </div>
+          <AwardStandingSelector
+            value={form.position}
+            onChange={handlePositionChange}
+            onCustomChange={(val) => setForm((f) => ({ ...f, position: val }))}
+          />
 
           <div className="form-group">
             <label className="form-label">Certificate Achievement Wording</label>

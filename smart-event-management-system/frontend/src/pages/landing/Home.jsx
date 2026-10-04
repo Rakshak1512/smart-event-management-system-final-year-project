@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { Link } from "react-router-dom";
-import { motion, useMotionValue, useTransform, useSpring } from "framer-motion";
+import { motion } from "framer-motion";
 import toast from "react-hot-toast";
 import {
   FiArrowRight,
@@ -67,46 +67,6 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
-
-  // Mouse Move Tilt Effect for Interactive Hero Card
-  const mouseX = useMotionValue(0);
-  const mouseY = useMotionValue(0);
-  const springConfig = { damping: 25, stiffness: 250 };
-  const rotateX = useSpring(useTransform(mouseY, [-200, 200], [8, -8]), springConfig);
-  const rotateY = useSpring(useTransform(mouseX, [-200, 200], [-8, 8]), springConfig);
-
-  const handleHeroMouseMove = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left - rect.width / 2;
-    const y = e.clientY - rect.top - rect.height / 2;
-    mouseX.set(x);
-    mouseY.set(y);
-  };
-
-  const handleHeroMouseLeave = () => {
-    mouseX.set(0);
-    mouseY.set(0);
-  };
-
-  // Cursor interaction state for Landing CTA buttons
-  const [gsCursor, setGsCursor] = useState({ x: 0, y: 0, active: false });
-  const [loginCursor, setLoginCursor] = useState({ x: 0, y: 0, active: false });
-  const [exploreCursor, setExploreCursor] = useState({ x: 0, y: 0, active: false });
-
-  const handleGsMove = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setGsCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top, active: true });
-  };
-
-  const handleLoginMove = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setLoginCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top, active: true });
-  };
-
-  const handleExploreMove = (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    setExploreCursor({ x: e.clientX - rect.left, y: e.clientY - rect.top, active: true });
-  };
 
   // Fetch live backend events
   useEffect(() => {
@@ -252,12 +212,10 @@ export default function Home() {
             <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center" }}>
               {/* 1. GET STARTED: Primary Glowing Gradient CTA */}
               <motion.div
-                whileHover={{ y: -3 }}
-                whileTap={{ scale: 0.97 }}
-                transition={{ type: "spring", stiffness: 450, damping: 25 }}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                transition={{ duration: 0.2 }}
                 style={{ position: "relative" }}
-                onMouseMove={handleGsMove}
-                onMouseLeave={() => setGsCursor((c) => ({ ...c, active: false }))}
               >
                 <Link
                   to="/register"
@@ -278,24 +236,6 @@ export default function Home() {
                     textDecoration: "none",
                   }}
                 >
-                  {/* Cursor-following radial glass highlight */}
-                  {gsCursor.active && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: "absolute",
-                        top: gsCursor.y - 45,
-                        left: gsCursor.x - 45,
-                        width: 90,
-                        height: 90,
-                        borderRadius: "50%",
-                        background: "radial-gradient(circle, rgba(255, 255, 255, 0.35) 0%, transparent 70%)",
-                        pointerEvents: "none",
-                        zIndex: 1,
-                      }}
-                    />
-                  )}
-
                   {/* Glass shine beam that sweeps across on hover */}
                   <motion.span
                     initial={{ x: "-120%", opacity: 0 }}
@@ -316,8 +256,8 @@ export default function Home() {
 
                   <span style={{ position: "relative", zIndex: 2 }}>Get Started</span>
                   <motion.span
-                    animate={{ x: [0, 5, 0] }}
-                    transition={{ repeat: Infinity, duration: 1.8, ease: "easeInOut" }}
+                    animate={{ x: [0, 4, 0] }}
+                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
                     style={{ position: "relative", zIndex: 2, display: "inline-flex" }}
                   >
                     <FiArrowRight size={16} />
@@ -327,12 +267,10 @@ export default function Home() {
 
               {/* 2. LOGIN: Premium Glass Authentication CTA */}
               <motion.div
-                whileHover={{ y: -3 }}
-                whileTap={{ scale: 0.97 }}
-                transition={{ type: "spring", stiffness: 450, damping: 25 }}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                transition={{ duration: 0.2 }}
                 style={{ position: "relative" }}
-                onMouseMove={handleLoginMove}
-                onMouseLeave={() => setLoginCursor((c) => ({ ...c, active: false }))}
               >
                 <Link
                   to="/login"
@@ -357,42 +295,6 @@ export default function Home() {
                     transition: "border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease",
                   }}
                 >
-                  {/* Cursor-following radial glow */}
-                  {loginCursor.active && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: "absolute",
-                        top: loginCursor.y - 40,
-                        left: loginCursor.x - 40,
-                        width: 80,
-                        height: 80,
-                        borderRadius: "50%",
-                        background: "radial-gradient(circle, rgba(139, 92, 246, 0.35) 0%, transparent 70%)",
-                        pointerEvents: "none",
-                        zIndex: 1,
-                      }}
-                    />
-                  )}
-
-                  {/* Translucent Sweep on Hover */}
-                  <motion.span
-                    initial={{ x: "-120%", opacity: 0 }}
-                    whileHover={{ x: "220%", opacity: [0, 0.4, 0] }}
-                    transition={{ duration: 0.55, ease: "easeOut" }}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "50%",
-                      height: "100%",
-                      background: "linear-gradient(90deg, transparent, rgba(139, 92, 246, 0.35), transparent)",
-                      transform: "skewX(-20deg)",
-                      pointerEvents: "none",
-                      zIndex: 1,
-                    }}
-                  />
-
                   <span style={{ position: "relative", zIndex: 2 }}>Login</span>
                   <motion.span
                     style={{ position: "relative", zIndex: 2, display: "inline-flex", color: "#8b5cf6" }}
@@ -404,12 +306,10 @@ export default function Home() {
 
               {/* 3. EXPLORE EVENTS: Event Discovery Navigation CTA */}
               <motion.div
-                whileHover={{ y: -3 }}
-                whileTap={{ scale: 0.97 }}
-                transition={{ type: "spring", stiffness: 450, damping: 25 }}
+                whileHover={{ y: -2 }}
+                whileTap={{ scale: 0.98 }}
+                transition={{ duration: 0.2 }}
                 style={{ position: "relative" }}
-                onMouseMove={handleExploreMove}
-                onMouseLeave={() => setExploreCursor((c) => ({ ...c, active: false }))}
               >
                 <button
                   type="button"
@@ -435,42 +335,6 @@ export default function Home() {
                     transition: "border-color 0.25s ease, box-shadow 0.25s ease, color 0.25s ease",
                   }}
                 >
-                  {/* Cursor-following radial glow */}
-                  {exploreCursor.active && (
-                    <span
-                      aria-hidden
-                      style={{
-                        position: "absolute",
-                        top: exploreCursor.y - 40,
-                        left: exploreCursor.x - 40,
-                        width: 80,
-                        height: 80,
-                        borderRadius: "50%",
-                        background: "radial-gradient(circle, rgba(14, 165, 233, 0.35) 0%, transparent 70%)",
-                        pointerEvents: "none",
-                        zIndex: 1,
-                      }}
-                    />
-                  )}
-
-                  {/* Discovery Traveling Border Glow / Light Sweep */}
-                  <motion.span
-                    initial={{ x: "-120%", opacity: 0 }}
-                    whileHover={{ x: "220%", opacity: [0, 0.35, 0] }}
-                    transition={{ duration: 0.6, ease: "easeOut" }}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "55%",
-                      height: "100%",
-                      background: "linear-gradient(90deg, transparent, rgba(14, 165, 233, 0.35), rgba(99, 102, 241, 0.25), transparent)",
-                      transform: "skewX(-20deg)",
-                      pointerEvents: "none",
-                      zIndex: 1,
-                    }}
-                  />
-
                   <span style={{ position: "relative", zIndex: 2 }}>Explore Events</span>
                   <motion.span
                     style={{ position: "relative", zIndex: 2, display: "inline-flex", color: "#0ea5e9" }}
@@ -498,18 +362,15 @@ export default function Home() {
             </div>
           </motion.div>
 
-          {/* Interactive Tilt Hero Card */}
+          {/* Clean, Stable Hero Card */}
           <motion.div
-            style={{
-              perspective: 1000,
-            }}
-            onMouseMove={handleHeroMouseMove}
-            onMouseLeave={handleHeroMouseLeave}
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.6, delay: 0.2 }}
+            style={{ width: "100%", maxWidth: 540, margin: "0 auto" }}
           >
-            <motion.div
+            <div
               style={{
-                rotateX,
-                rotateY,
                 position: "relative",
                 borderRadius: 24,
                 overflow: "hidden",
@@ -517,7 +378,6 @@ export default function Home() {
                 border: "1.5px solid rgba(255, 255, 255, 0.18)",
                 background: "var(--gradient-soft)",
               }}
-              className="float-card"
             >
               <img
                 src={heroIllustration}
@@ -531,7 +391,7 @@ export default function Home() {
                   borderRadius: 24,
                 }}
               />
-            </motion.div>
+            </div>
           </motion.div>
         </div>
       </section>
@@ -830,6 +690,12 @@ export default function Home() {
         @media (max-width: 1000px) {
           .hero-grid {
             grid-template-columns: 1fr !important;
+            gap: 36px !important;
+          }
+        }
+        @media (max-width: 600px) {
+          .hero-grid {
+            gap: 24px !important;
           }
         }
       `}</style>

@@ -12,6 +12,7 @@ import {
   FiCheck,
   FiMaximize2,
   FiSearch,
+  FiX,
 } from "react-icons/fi";
 import { BsQrCode } from "react-icons/bs";
 import EmptyState from "../../components/ui/EmptyState.jsx";
@@ -20,6 +21,7 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import { registrationService, feedbackService } from "../../api/services.js";
 import { fileUrl, formatDate, statusBadgeClass } from "../../utils/format.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 
 export default function MyRegistrations() {
   const { user } = useAuth();
@@ -31,7 +33,7 @@ export default function MyRegistrations() {
   const [qrModal, setQrModal] = useState(null);
   const [cancelTarget, setCancelTarget] = useState(null);
   const [cancelling, setCancelling] = useState(false);
-  const [feedbackModal, setFeedbackModal] = useState(null);
+  const { addListener } = useRealtime();
 
   const load = () => {
     setLoading(true);
@@ -52,6 +54,25 @@ export default function MyRegistrations() {
   useEffect(() => {
     load();
   }, []);
+
+  // Real-time synchronization for student's registrations
+  useEffect(() => {
+    const remove = addListener((msg) => {
+      if (
+        msg.type === "REGISTRATION_STATUS_CHANGED" ||
+        msg.type === "SEAT_ASSIGNED" ||
+        msg.type === "SEAT_REASSIGNED" ||
+        msg.type === "ATTENDANCE_CHECKED_IN"
+      ) {
+        // Silently reload student's registrations to update seats & statuses in real time
+        registrationService
+          .my()
+          .then(({ data }) => setRegs(Array.isArray(data) ? data : []))
+          .catch(() => {});
+      }
+    });
+    return () => remove();
+  }, [addListener]);
 
   const handleCancel = async () => {
     if (!cancelTarget) return;
@@ -170,10 +191,10 @@ export default function MyRegistrations() {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           {regs.length > 0 && (
-            <div style={{ position: "relative", minWidth: 260 }}>
+            <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
               <input
                 className="form-input"
-                style={{ padding: "8px 12px 8px 34px", fontSize: 13 }}
+                style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
                 placeholder="Search event, ticket code, status..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -188,6 +209,26 @@ export default function MyRegistrations() {
                   color: "var(--text-muted)",
                 }}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery("")}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: 2,
+                  }}
+                  title="Clear search"
+                >
+                  <FiX size={14} />
+                </button>
+              )}
             </div>
           )}
           <button className="btn btn-outline btn-sm" onClick={load} disabled={loading}>

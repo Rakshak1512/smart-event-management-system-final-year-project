@@ -18,10 +18,12 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { adminService, eventService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate } from "../../utils/format.js";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
+  const { addListener } = useRealtime();
   const [summary, setSummary] = useState(null);
   const [facultyList, setFacultyList] = useState([]);
   const [recentEvents, setRecentEvents] = useState([]);
@@ -49,22 +51,30 @@ export default function AdminDashboard() {
     fetchDashboard(true);
   }, []);
 
+  // Real-time synchronization for admin dashboard counters
+  useEffect(() => {
+    const remove = addListener((msg) => {
+      if (
+        msg.type === "REGISTRATION_CREATED" ||
+        msg.type === "REGISTRATION_STATUS_CHANGED" ||
+        msg.type === "ATTENDANCE_CHECKED_IN" ||
+        msg.type === "REGISTRATION_CANCELLED" ||
+        msg.type === "EVENT_UPDATED"
+      ) {
+        fetchDashboard(false);
+      }
+    });
+    return () => remove();
+  }, [addListener]);
+
   return (
     <PageTransition>
       {/* Welcome Banner */}
       <div
-        className="glass-card float-card"
+        className="glass-card welcome-banner"
         style={{
-          padding: "30px 32px",
-          marginBottom: 26,
           background: "linear-gradient(135deg, rgba(99, 102, 241, 0.18) 0%, rgba(168, 85, 247, 0.12) 100%)",
           border: "1.5px solid rgba(139, 92, 246, 0.3)",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 18,
-          borderRadius: "24px",
           boxShadow: "0 14px 35px rgba(139, 92, 246, 0.12)",
         }}
       >
@@ -84,7 +94,7 @@ export default function AdminDashboard() {
           >
             <FiShield size={14} /> Principal & Administrative Command
           </span>
-          <h1 style={{ fontSize: "clamp(22px, 3.5vw, 28px)", marginBottom: 6 }}>
+          <h1 style={{ fontSize: "clamp(20px, 3.5vw, 28px)", marginBottom: 6 }}>
             Welcome, {user?.name?.split(" ")[0]} 👋
           </h1>
           <p style={{ color: "var(--text-secondary)", fontSize: 14.5, margin: 0 }}>
@@ -92,7 +102,7 @@ export default function AdminDashboard() {
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <div className="btn-group" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <Link to="/admin/assignments" className="btn btn-primary btn-sm">
             <FiPlus /> Assign Work
           </Link>
@@ -239,7 +249,7 @@ export default function AdminDashboard() {
           </Link>
         </div>
 
-        <div className="glass-card table-wrap" style={{ borderRadius: "20px", overflow: "hidden" }}>
+        <div className="glass-card table-wrap" style={{ borderRadius: "20px" }}>
           <table className="data-table">
             <thead>
               <tr>
@@ -247,7 +257,7 @@ export default function AdminDashboard() {
                 <th>Category</th>
                 <th>Organizer</th>
                 <th>Date & Venue</th>
-                <th>Seat Fill</th>
+                <th>Registrations</th>
               </tr>
             </thead>
             <tbody>

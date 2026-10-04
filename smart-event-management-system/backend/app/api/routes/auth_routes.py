@@ -57,15 +57,20 @@ def _log(user_id, action: str, request: Request, details: str = None):
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register(payload: UserCreate, request: Request):
     clean_email = payload.email.strip().lower()
+    admin_id = payload.admin_id.strip() if payload.admin_id and payload.admin_id.strip() else None
     reg_num = payload.registration_number.strip() if payload.registration_number and payload.registration_number.strip() else None
     dept = payload.department.strip() if payload.department and payload.department.strip() else None
     sem = payload.semester.strip() if payload.semester and payload.semester.strip() else None
+    role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
+
+    if payload.role == RoleEnum.admin and admin_id and not reg_num:
+        reg_num = admin_id
 
     existing = db_service.get_user_by_email(clean_email)
     if existing and existing.is_email_verified:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An account with this email already exists.")
 
-    if reg_num:
+    if reg_num and payload.role == RoleEnum.student:
         existing_reg = db_service.get_user_by_reg_no(reg_num)
         if existing_reg and existing_reg.is_email_verified:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number already in use")
@@ -74,7 +79,6 @@ def register(payload: UserCreate, request: Request):
         otp = generate_otp()
         logger.info("OTP generation succeeded for %s", _mask_email(clean_email))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
-        role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
 
         pending_data = {
             "name": payload.name.strip(),
@@ -82,6 +86,7 @@ def register(payload: UserCreate, request: Request):
             "hashed_password": hash_password(payload.password),
             "role": role_str,
             "registration_number": reg_num,
+            "admin_id": admin_id or (reg_num if role_str == "admin" else None),
             "department": dept,
             "semester": sem,
             "otp_code": otp,
@@ -107,6 +112,7 @@ def register(payload: UserCreate, request: Request):
             phone=None,
             role=payload.role,
             registration_number=reg_num,
+            admin_id=admin_id or (reg_num if role_str == "admin" else None),
             department=dept,
             semester=sem,
             is_email_verified=False,
@@ -148,6 +154,7 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
             hashed_password=pending["hashed_password"],
             role=pending["role"],
             registration_number=pending.get("registration_number"),
+            admin_id=pending.get("admin_id"),
             phone=pending.get("phone"),
             department=pending.get("department"),
             semester=pending.get("semester"),
@@ -195,15 +202,22 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
 def send_email_login_otp(payload: EmailSendOtpRequest, request: Request):
     clean_email = payload.email.strip().lower()
     role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
-    user = db_service.get_user_by_email_and_role(clean_email, role_str)
+    user = db_service.get_user_by_email(clean_email)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="No account found with this email and role.",
+            detail="No account found with this email.",
+        )
+
+    user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
+    if user_role_str != role_str.lower().strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account does not have permission for this role.",
         )
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is currently inactive.")
 
     otp = generate_otp()
     expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
@@ -222,12 +236,19 @@ def send_email_login_otp(payload: EmailSendOtpRequest, request: Request):
 def verify_email_login_otp(payload: EmailVerifyOtpRequest, request: Request):
     clean_email = payload.email.strip().lower()
     role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
-    user = db_service.get_user_by_email_and_role(clean_email, role_str)
+    user = db_service.get_user_by_email(clean_email)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
+    if user_role_str != role_str.lower().strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account does not have permission for this role.",
+        )
+
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is currently inactive.")
 
     ok, msg, verification = db_service.verify_login_otp_code(clean_email, payload.otp_code.strip())
     if not ok:
@@ -292,14 +313,24 @@ def resend_verification_otp(payload: ResendOtpRequest):
 
 @router.post("/login", response_model=Token)
 def login(payload: UserLogin, request: Request):
+    clean_email = payload.email.strip().lower()
     role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
-    user = db_service.get_user_by_email_and_role(payload.email, role_str)
+    user = db_service.get_user_by_email(clean_email)
+
     if not user or not verify_password(payload.password, user.hashed_password):
         _log(user.id if user else None, "login_failed", request)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
+
+    user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
+    if user_role_str != role_str.lower().strip():
+        _log(user.id, "login_role_mismatch", request)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account does not have permission for this role.",
+        )
 
     if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account is deactivated")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is currently inactive.")
 
     if not user.is_email_verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email first")

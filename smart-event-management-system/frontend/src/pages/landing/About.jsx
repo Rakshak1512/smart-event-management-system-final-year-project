@@ -8,7 +8,7 @@ const values = [
   {
     icon: FiTarget,
     title: "Purpose-built Architecture",
-    text: "Designed specifically around how campus events operate — dynamic seat allocations, department quotas, instant QR tickets, and certified attendance.",
+    text: "Designed specifically around how campus events operate — branch-wise registrations, capacity quotas, instant QR tickets, and certified attendance.",
   },
   {
     icon: FiHeart,
@@ -168,7 +168,7 @@ export default function About() {
               experiences in academic life. Yet organizing them often relies on chaotic WhatsApp groups and manual email blasts.
             </p>
             <p style={{ color: "var(--text-secondary)", lineHeight: 1.7, fontSize: 15 }}>
-              EventSphere unifies every step — discovery, 6-digit OTP verification, seat reservations, digital QR check-in slips,
+              EventSphere unifies every step — discovery, 6-digit OTP verification, instant registrations, digital QR check-in slips,
               and authenticated certificate downloads — giving campus communities a modern experience they love.
             </p>
           </motion.div>

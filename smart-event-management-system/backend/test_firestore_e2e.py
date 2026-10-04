@@ -115,7 +115,9 @@ def mock_get_next_id(collection_name: str) -> int:
 with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
      patch("app.db.firestore_service.get_firestore_db", return_value=mock_db), \
      patch("app.core.firebase.get_next_id", side_effect=mock_get_next_id), \
-     patch("app.db.firestore_service.get_next_id", side_effect=mock_get_next_id):
+     patch("app.db.firestore_service.get_next_id", side_effect=mock_get_next_id), \
+     patch("app.api.routes.auth_routes.send_otp_email", return_value=(True, "Delivered")), \
+     patch("app.services.email_service.send_email", return_value=True):
 
     from app.main import app
     from app.db import firestore_service as db_service
@@ -124,6 +126,17 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     print("=" * 60)
     print("RUNNING END-TO-END FIRESTORE TEST SUITE")
     print("=" * 60)
+
+    def get_otp_for(email):
+        for doc in mock_db.collection("pending_registrations").stream():
+            d = doc.to_dict() or {}
+            if d.get("email") == email:
+                return d.get("otp_code")
+        for doc in mock_db.collection("email_verifications").stream():
+            d = doc.to_dict() or {}
+            if d.get("email") == email:
+                return d.get("otp_code")
+        return "123456"
 
     # 1. Health check
     res = client.get("/api/health")
@@ -151,10 +164,7 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     print("[PASS] 2. Student registration -> 201 Created")
 
     # Verify Email with OTP
-    # Retrieve OTP directly from mock store
-    ev_docs = mock_db.collection("email_verifications").stream()
-    assert len(ev_docs) > 0
-    otp_code = ev_docs[0].to_dict()["otp_code"]
+    otp_code = get_otp_for("jane.student@college.edu")
     res = client.post("/api/auth/verify-email", json={"email": "jane.student@college.edu", "otp_code": otp_code})
     assert res.status_code == 200, f"Email verification failed: {res.text}"
     assert res.json()["is_email_verified"] is True
@@ -182,12 +192,12 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     }
     res = client.post("/api/auth/register", json=faculty_payload)
     assert res.status_code == 201, f"Faculty register failed: {res.text}"
-    faculty_id = res.json()["id"]
 
     # Verify faculty email
-    ev_docs = mock_db.collection("email_verifications").where("user_id", "==", faculty_id).stream()
-    f_otp = ev_docs[0].to_dict()["otp_code"]
-    client.post("/api/auth/verify-email", json={"email": "alan.turing@college.edu", "otp_code": f_otp})
+    f_otp = get_otp_for("alan.turing@college.edu")
+    res_f = client.post("/api/auth/verify-email", json={"email": "alan.turing@college.edu", "otp_code": f_otp})
+    assert res_f.status_code == 200
+    faculty_id = res_f.json()["id"]
 
     res = client.post("/api/auth/login", json={
         "email": "alan.turing@college.edu",
@@ -205,7 +215,7 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
         "description": "A 24-hour campus hackathon to innovate next-gen smart applications.",
         "category": "Technical",
         "venue": "Main Campus Auditorium",
-        "event_date": "2026-09-15",
+        "event_date": (datetime.now(timezone.utc) + timedelta(days=10)).strftime("%Y-%m-%d"),
         "event_time": "09:00 AM",
         "total_seats": 50,
     }
@@ -240,10 +250,10 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     }
     res = client.post("/api/auth/register", json=faculty_b_payload)
     assert res.status_code == 201
-    faculty_b_id = res.json()["id"]
-    ev_docs = mock_db.collection("email_verifications").where("user_id", "==", faculty_b_id).stream()
-    fb_otp = ev_docs[0].to_dict()["otp_code"]
-    client.post("/api/auth/verify-email", json={"email": "ada.lovelace@college.edu", "otp_code": fb_otp})
+    fb_otp = get_otp_for("ada.lovelace@college.edu")
+    res_fb = client.post("/api/auth/verify-email", json={"email": "ada.lovelace@college.edu", "otp_code": fb_otp})
+    assert res_fb.status_code == 200
+    faculty_b_id = res_fb.json()["id"]
     res = client.post("/api/auth/login", json={"email": "ada.lovelace@college.edu", "password": "FacultyPassword@123", "role": "faculty"})
     faculty_b_headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
 
@@ -277,7 +287,7 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     # 8. Duplicate Registration Rejection
     res = client.post("/api/registrations", json={"event_id": event_id}, headers=student_headers)
     assert res.status_code == 400
-    assert "already registered" in res.json()["detail"]
+    assert "already" in res.json()["detail"].lower() and "registered" in res.json()["detail"].lower()
     print("[PASS] 9. Duplicate registration correctly rejected -> 400 Bad Request")
 
     # 9. Student Registration List

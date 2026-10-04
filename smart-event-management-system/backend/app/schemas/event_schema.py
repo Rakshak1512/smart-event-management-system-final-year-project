@@ -16,9 +16,6 @@ class EventCreate(BaseModel):
     max_team_size: int = Field(4, ge=2, le=20)
     rules: Optional[str] = None
     requirements: Optional[str] = None
-    seating_enabled: bool = False
-    total_rows: int = 10
-    seats_per_row: int = 10
 
 
 class EventUpdate(BaseModel):
@@ -33,9 +30,6 @@ class EventUpdate(BaseModel):
     max_team_size: Optional[int] = Field(None, ge=2, le=20)
     rules: Optional[str] = None
     requirements: Optional[str] = None
-    seating_enabled: Optional[bool] = None
-    total_rows: Optional[int] = None
-    seats_per_row: Optional[int] = None
 
 
 class EventOut(BaseModel):
@@ -57,15 +51,13 @@ class EventOut(BaseModel):
     max_team_size: int = 4
     rules: Optional[str] = None
     requirements: Optional[str] = None
-    seating_enabled: bool = False
-    total_rows: int = 10
-    seats_per_row: int = 10
     created_at: datetime
     updated_at: Optional[datetime] = None
     updated_by: Optional[int] = None
     updated_by_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
 
 
 class EventEditHistoryOut(BaseModel):

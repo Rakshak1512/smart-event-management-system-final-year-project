@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { useLocation, useSearchParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
@@ -7,7 +7,6 @@ import {
   FiUserCheck,
   FiRefreshCw,
   FiUsers,
-  FiUser,
   FiDownload,
   FiCheckCircle,
   FiClock,
@@ -15,14 +14,12 @@ import {
   FiMapPin,
   FiArrowLeft,
   FiSearch,
-  FiFilter,
   FiAlertCircle,
-  FiTag,
   FiEye,
   FiAlertTriangle,
-  FiFileText,
-  FiInfo,
-  FiChevronDown,
+  FiLayers,
+  FiFilter,
+  FiArrowRight,
 } from "react-icons/fi";
 import { motion, AnimatePresence } from "framer-motion";
 import Modal from "../../components/ui/Modal.jsx";
@@ -30,16 +27,10 @@ import EmptyState from "../../components/ui/EmptyState.jsx";
 import { SkeletonGrid, SkeletonRow } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { eventService, registrationService } from "../../api/services.js";
-import { formatDate, statusBadgeClass } from "../../utils/format.js";
+import { useRealtime } from "../../context/RealtimeContext.jsx";
+import { formatDate } from "../../utils/format.js";
 import { exportToCSV, slugifyFilename } from "../../utils/exportUtils.js";
-
-const SEAT_OCCUPYING_STATUSES = new Set([
-  "registered",
-  "approved",
-  "attended",
-  "completed",
-  "confirmed",
-]);
+import { generateCustomReportPDF } from "../../utils/pdfReportGenerator.js";
 
 export default function FacultyRegistrations() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -55,11 +46,15 @@ export default function FacultyRegistrations() {
     searchParams.get("eventId") || (location.state?.eventId ? String(location.state.eventId) : "")
   );
 
-  // Event Registrations State
+  // Event Registrations & Branch Stats State
   const [regs, setRegs] = useState([]);
+  const [branchStats, setBranchStats] = useState(null);
   const [capacity, setCapacity] = useState(null);
   const [loadingRegs, setLoadingRegs] = useState(false);
+
+  // Filters & Search
   const [activeFilter, setActiveFilter] = useState("all"); // "all" | "pending" | "approved" | "cancelled"
+  const [selectedBranch, setSelectedBranch] = useState(searchParams.get("branch") || "all");
   const [studentSearch, setStudentSearch] = useState("");
 
   // Action Modals State
@@ -67,6 +62,8 @@ export default function FacultyRegistrations() {
   const [cancelTarget, setCancelTarget] = useState(null);
   const [detailsTarget, setDetailsTarget] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+
+  const { subscribeToEvent, addListener } = useRealtime();
 
   // Load All Events Catalog
   const loadEventsCatalog = useCallback(async (showToast = false) => {
@@ -96,7 +93,7 @@ export default function FacultyRegistrations() {
     loadEventsCatalog(false);
   }, [loadEventsCatalog]);
 
-  // Periodic Auto-Sync for Events Catalog (every 4 seconds when on Level 1)
+  // Periodic Auto-Sync for Events Catalog (when on Level 1)
   useEffect(() => {
     if (selectedEventId) return;
     const interval = setInterval(() => {
@@ -111,29 +108,32 @@ export default function FacultyRegistrations() {
     return () => clearInterval(interval);
   }, [selectedEventId]);
 
-  // Sync selectedEventId with URL search params
+  // Sync selectedEventId & branch with URL search params
   useEffect(() => {
-    if (selectedEventId) {
-      setSearchParams({ eventId: selectedEventId }, { replace: true });
-    } else {
-      setSearchParams({}, { replace: true });
-    }
-  }, [selectedEventId, setSearchParams]);
+    const params = {};
+    if (selectedEventId) params.eventId = selectedEventId;
+    if (selectedBranch && selectedBranch !== "all") params.branch = selectedBranch;
+    setSearchParams(params, { replace: true });
+  }, [selectedEventId, selectedBranch, setSearchParams]);
 
-  // Load Registrations for Selected Event
+  // Load Registrations & Branch Stats for Selected Event
   const loadEventRegistrations = useCallback(
     async (showLoading = true) => {
       if (!selectedEventId) return;
       if (showLoading) setLoadingRegs(true);
       try {
-        const [regsRes, capRes, evRes] = await Promise.allSettled([
+        const [regsRes, branchStatsRes, capRes, evRes] = await Promise.allSettled([
           registrationService.forEvent(selectedEventId),
+          registrationService.getBranchStats(selectedEventId),
           registrationService.getCapacity(selectedEventId),
           eventService.get(selectedEventId),
         ]);
 
         if (regsRes.status === "fulfilled") {
           setRegs(regsRes.value.data || []);
+        }
+        if (branchStatsRes.status === "fulfilled") {
+          setBranchStats(branchStatsRes.value.data);
         }
         if (capRes.status === "fulfilled") {
           setCapacity(capRes.value.data);
@@ -156,28 +156,29 @@ export default function FacultyRegistrations() {
   useEffect(() => {
     if (selectedEventId) {
       loadEventRegistrations(true);
+      subscribeToEvent(selectedEventId);
     }
-  }, [selectedEventId, loadEventRegistrations]);
+  }, [selectedEventId, loadEventRegistrations, subscribeToEvent]);
 
-  // Real-time synchronization polling (every 3 seconds) for registrations
+  // Real-time WebSocket Event Listener (Zero-polling instantaneous updates)
   useEffect(() => {
     if (!selectedEventId) return;
-    const interval = setInterval(() => {
-      if (!document.hidden) {
-        loadEventRegistrations(false);
+
+    const removeListener = addListener((msg) => {
+      if (!msg.event_id || String(msg.event_id) === String(selectedEventId)) {
+        if (
+          msg.type === "REGISTRATION_CREATED" ||
+          msg.type === "REGISTRATION_STATUS_CHANGED" ||
+          msg.type === "ATTENDANCE_CHECKED_IN" ||
+          msg.type === "REGISTRATION_CANCELLED"
+        ) {
+          loadEventRegistrations(false);
+        }
       }
-    }, 3000);
+    });
 
-    const handleFocus = () => {
-      loadEventRegistrations(false);
-    };
-    window.addEventListener("focus", handleFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener("focus", handleFocus);
-    };
-  }, [selectedEventId, loadEventRegistrations]);
+    return () => removeListener();
+  }, [selectedEventId, addListener, loadEventRegistrations]);
 
   // Approve Handler
   const handleConfirmApprove = async () => {
@@ -219,7 +220,8 @@ export default function FacultyRegistrations() {
 
   const selectedEvent = events.find((e) => String(e.id) === String(selectedEventId));
 
-  // Compute breakdown counts
+  // Compute breakdown counts dynamically
+  const totalRegistrationsCount = regs.length;
   const pendingCount = regs.filter(
     (r) => r.status === "pending" || r.status === "registered"
   ).length;
@@ -229,82 +231,146 @@ export default function FacultyRegistrations() {
     (r) => r.status === "attended" || r.status === "completed" || Boolean(r.checked_in_at)
   ).length;
 
-  // Filtered registrations list
-  const filteredRegs = regs.filter((r) => {
-    const st = String(r.status || "").toLowerCase();
-    if (activeFilter === "pending" && st !== "pending" && st !== "registered") return false;
-    if (activeFilter === "approved" && st !== "approved") return false;
-    if (activeFilter === "cancelled" && st !== "cancelled") return false;
+  // Dynamic branch list from registered students data
+  const dynamicBranches = useMemo(() => {
+    if (branchStats?.branches && branchStats.branches.length > 0) {
+      return branchStats.branches;
+    }
+    // Fallback: calculate directly from regs
+    const map = {};
+    for (const r of regs) {
+      const b = (r.student?.department || "General").trim().toUpperCase();
+      if (!map[b]) {
+        map[b] = { branch: b, total: 0, approved: 0, pending: 0, cancelled: 0, attended: 0 };
+      }
+      map[b].total += 1;
+      const st = String(r.status || "").toLowerCase();
+      if (st === "approved") map[b].approved += 1;
+      else if (st === "pending" || st === "registered") map[b].pending += 1;
+      else if (st === "cancelled") map[b].cancelled += 1;
+      else if (st === "attended" || st === "completed") map[b].attended += 1;
+    }
+    return Object.values(map).sort((a, b) => b.total - a.total);
+  }, [branchStats, regs]);
 
-    if (!studentSearch.trim()) return true;
-    const q = studentSearch.toLowerCase();
-    return (
-      r.student?.name?.toLowerCase().includes(q) ||
-      r.student?.registration_number?.toLowerCase().includes(q) ||
-      r.student?.email?.toLowerCase().includes(q) ||
-      r.student?.department?.toLowerCase().includes(q) ||
-      r.ticket_code?.toLowerCase().includes(q)
-    );
-  });
+  // Multi-field search & filtering
+  const filteredRegs = useMemo(() => {
+    return regs.filter((r) => {
+      // 1. Status Filter
+      const st = String(r.status || "").toLowerCase();
+      if (activeFilter === "pending" && st !== "pending" && st !== "registered") return false;
+      if (activeFilter === "approved" && st !== "approved") return false;
+      if (activeFilter === "cancelled" && st !== "cancelled") return false;
 
-  // CSV Export helper
+      // 2. Branch Filter
+      if (selectedBranch && selectedBranch !== "all") {
+        const studentBranch = (r.student?.department || "General").trim().toUpperCase();
+        if (studentBranch !== selectedBranch.toUpperCase()) return false;
+      }
+
+      // 3. Multi-field Search Filter
+      if (!studentSearch.trim()) return true;
+      const q = studentSearch.toLowerCase().trim();
+
+      const name = (r.student?.name || "").toLowerCase();
+      const regNo = (r.student?.registration_number || "").toLowerCase();
+      const email = (r.student?.email || "").toLowerCase();
+      const branch = (r.student?.department || "").toLowerCase();
+      const semester = String(r.student?.semester || "").toLowerCase();
+      const ticket = (r.ticket_code || "").toLowerCase();
+      const statusText = st;
+
+      return (
+        name.includes(q) ||
+        regNo.includes(q) ||
+        email.includes(q) ||
+        branch.includes(q) ||
+        semester.includes(q) ||
+        ticket.includes(q) ||
+        statusText.includes(q)
+      );
+    });
+  }, [regs, activeFilter, selectedBranch, studentSearch]);
+
+  // Report PDF / Export helper
   const handleExport = (type = "all") => {
     if (!selectedEvent) return;
     let targetList = regs;
     let suffix = "all-registrations";
+    let reportSubtitle = "Official Complete Registrations Roster";
 
     if (type === "approved") {
-      targetList = regs.filter((r) => r.status === "approved");
+      targetList = regs.filter((r) => r.status === "approved" || r.status === "attended" || Boolean(r.checked_in_at));
       suffix = "approved-registrations";
-    } else if (type === "pending") {
-      targetList = regs.filter((r) => r.status === "pending" || r.status === "registered");
-      suffix = "pending-registrations";
-    } else if (type === "cancelled") {
-      targetList = regs.filter((r) => r.status === "cancelled");
-      suffix = "cancelled-registrations";
+      reportSubtitle = "Approved Students Attendance & Verification Roster";
+    } else if (type === "branch" && selectedBranch !== "all") {
+      targetList = regs.filter(
+        (r) => (r.student?.department || "General").toUpperCase() === selectedBranch.toUpperCase()
+      );
+      suffix = `${selectedBranch.toLowerCase()}-registrations`;
+      reportSubtitle = `Department Registration Roster — ${selectedBranch}`;
     }
 
-    const filename = slugifyFilename(selectedEvent.title, suffix);
+    const filename = `EventSphere_${slugifyFilename(selectedEvent.title, suffix)}_${new Date().toISOString().split("T")[0]}.pdf`;
     const headers = [
+      "S.No",
       "Student Name",
-      "Registration Number",
+      "Register No",
       "Email Address",
-      "Branch / Department",
-      "Class / Semester",
-      "Event Title",
+      "Department",
+      "Class / Sem",
       "Ticket Code",
-      "Registration Date & Time",
-      "Registration Status",
-      "Approved At",
-      "Approved By",
-      "Cancelled At",
-      "Cancelled By",
+      "Status",
+      "Attendance",
     ];
 
-    const rows = targetList.map((r) => [
-      r.student?.name || `Student #${r.student_id}`,
-      r.student?.registration_number || "N/A",
-      r.student?.email || "N/A",
-      r.student?.department || "N/A",
-      r.student?.semester ? `Semester ${r.student.semester}` : "N/A",
-      selectedEvent.title,
-      r.ticket_code || "N/A",
-      formatDate(r.registered_at),
-      (r.status || "registered").toUpperCase(),
-      r.approved_at ? formatDate(r.approved_at) : "N/A",
-      r.approved_by_name || r.approved_by || "N/A",
-      r.cancelled_at ? formatDate(r.cancelled_at) : "N/A",
-      r.cancelled_by_name || r.cancelled_by || "N/A",
-    ]);
+    const rows = targetList.map((r, idx) => {
+      const isAttended = r.status === "attended" || r.status === "completed" || Boolean(r.checked_in_at);
+      return [
+        idx + 1,
+        r.student?.name || `Student #${r.student_id}`,
+        r.student?.registration_number || "N/A",
+        r.student?.email || "N/A",
+        r.student?.department || "General",
+        r.student?.semester ? `Sem ${r.student.semester}` : "N/A",
+        r.ticket_code || "N/A",
+        (r.status || "registered").toUpperCase(),
+        isAttended ? "Attended" : "Not Attended",
+      ];
+    });
 
-    exportToCSV(filename, headers, rows);
-    toast.success(`Exported ${rows.length} records to ${filename}.csv`);
+    const attendedCount = targetList.filter(
+      (r) => r.status === "attended" || r.status === "completed" || Boolean(r.checked_in_at)
+    ).length;
+
+    generateCustomReportPDF({
+      title: `${selectedEvent.title} — Registration Report`,
+      subtitle: reportSubtitle,
+      event: selectedEvent,
+      headers,
+      rows,
+      orientation: "landscape",
+      includeSummary: true,
+      summaryCards: [
+        { label: "Total Registrations", value: targetList.length, color: [79, 70, 229] },
+        { label: "Attended Present", value: attendedCount, color: [16, 185, 129] },
+        { label: "Pending Attendance", value: Math.max(0, targetList.length - attendedCount), color: [245, 158, 11] },
+      ],
+      metadata: [
+        { label: "Event Date", value: selectedEvent.event_date },
+        { label: "Venue", value: selectedEvent.venue || "Campus Venue" },
+        { label: "Roster Scope", value: type.toUpperCase() },
+      ],
+      filename,
+    });
+
+    toast.success(`Generated official PDF report (${rows.length} records)!`);
   };
 
   // Filtered Events Catalog for Selection View
   const filteredEvents = events.filter((ev) => {
     if (!eventSearch.trim()) return true;
-    const q = eventSearch.toLowerCase();
+    const q = eventSearch.toLowerCase().trim();
     return (
       ev.title?.toLowerCase().includes(q) ||
       ev.category?.toLowerCase().includes(q) ||
@@ -324,7 +390,7 @@ export default function FacultyRegistrations() {
             <div>
               <h1 className="page-title">Student Registrations Management</h1>
               <p className="page-subtitle" style={{ marginBottom: 0 }}>
-                Review individual student applications, approve eligible candidates, cancel registrations, and track registration status.
+                Review individual student applications, track branch-wise participation, approve registrations, and export rosters.
               </p>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -339,11 +405,11 @@ export default function FacultyRegistrations() {
             </div>
           </div>
 
-          {/* Search bar */}
+          {/* Search bar with clear button */}
           <div style={{ position: "relative", maxWidth: 420, marginBottom: 24 }}>
             <input
               className="form-input"
-              style={{ padding: "10px 14px 10px 38px", fontSize: 13.5 }}
+              style={{ padding: "10px 36px 10px 38px", fontSize: 13.5 }}
               placeholder="Search events by title, category, venue..."
               value={eventSearch}
               onChange={(e) => setEventSearch(e.target.value)}
@@ -358,6 +424,26 @@ export default function FacultyRegistrations() {
                 color: "var(--text-muted)",
               }}
             />
+            {eventSearch && (
+              <button
+                type="button"
+                onClick={() => setEventSearch("")}
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  color: "var(--text-muted)",
+                  cursor: "pointer",
+                  padding: 2,
+                }}
+                title="Clear search"
+              >
+                <FiX size={15} />
+              </button>
+            )}
           </div>
 
           {/* Error State */}
@@ -458,7 +544,7 @@ export default function FacultyRegistrations() {
                         flex: 1,
                       }}
                     >
-                      {ev.description || "Manage student registrations and verify approvals."}
+                      {ev.description || "Manage student registrations and verify branch-wise approvals."}
                     </p>
 
                     <div style={{ fontSize: 12.5, color: "var(--text-muted)", display: "flex", flexDirection: "column", gap: 5, marginBottom: 16 }}>
@@ -472,7 +558,7 @@ export default function FacultyRegistrations() {
                       </div>
                     </div>
 
-                    {/* Breakdown Pill */}
+                    {/* Registrations vs Capacity Pill */}
                     <div
                       style={{
                         background: "var(--bg-glass)",
@@ -492,7 +578,7 @@ export default function FacultyRegistrations() {
                       </div>
                       <div style={{ textAlign: "right" }}>
                         <span style={{ color: "var(--text-muted)", fontSize: 11.5, display: "block" }}>Capacity</span>
-                        <strong style={{ color: "var(--text-primary)", fontSize: 15 }}>{ev.total_seats} Seats</strong>
+                        <strong style={{ color: "var(--text-primary)", fontSize: 15 }}>{ev.total_seats} Spots</strong>
                       </div>
                     </div>
 
@@ -532,7 +618,10 @@ export default function FacultyRegistrations() {
             <button
               type="button"
               className="btn btn-outline btn-sm"
-              onClick={() => setSelectedEventId("")}
+              onClick={() => {
+                setSelectedEventId("");
+                setSelectedBranch("all");
+              }}
               style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
             >
               <FiArrowLeft size={14} /> Back to All Events
@@ -544,7 +633,10 @@ export default function FacultyRegistrations() {
                 className="form-select"
                 style={{ minWidth: 240, maxWidth: 360, fontSize: 13 }}
                 value={selectedEventId}
-                onChange={(e) => setSelectedEventId(e.target.value)}
+                onChange={(e) => {
+                  setSelectedEventId(e.target.value);
+                  setSelectedBranch("all");
+                }}
               >
                 {events.map((ev) => (
                   <option key={ev.id} value={String(ev.id)}>
@@ -594,7 +686,7 @@ export default function FacultyRegistrations() {
                     {selectedEvent.title}
                   </h1>
                   <p style={{ color: "var(--text-secondary)", fontSize: 13.5, margin: "0 0 10px", lineHeight: 1.5 }}>
-                    {selectedEvent.description || "Review and manage individual student registration statuses."}
+                    {selectedEvent.description || "Review and manage individual student registration statuses and branch turnout."}
                   </p>
                   <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13, color: "var(--text-muted)" }}>
                     <span>📍 {selectedEvent.venue || "Campus Venue"}</span>
@@ -602,20 +694,25 @@ export default function FacultyRegistrations() {
                   </div>
                 </div>
 
+                {/* Prominent High-Level Registration Statistics */}
                 <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                  {/* PROMINENT TOTAL REGISTRATIONS */}
                   <div
                     style={{
-                      background: "var(--bg-glass)",
-                      padding: "10px 16px",
-                      borderRadius: 14,
-                      border: "1px solid var(--border-color)",
+                      background: "linear-gradient(135deg, rgba(139, 92, 246, 0.22) 0%, rgba(99, 102, 241, 0.15) 100%)",
+                      padding: "12px 20px",
+                      borderRadius: 16,
+                      border: "1.5px solid rgba(139, 92, 246, 0.4)",
                       textAlign: "center",
+                      boxShadow: "0 4px 16px rgba(139, 92, 246, 0.15)",
                     }}
                   >
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                      Total
+                    <div style={{ fontSize: 11, color: "#c4b5fd", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.5px" }}>
+                      TOTAL REGISTRATIONS
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: "#8b5cf6" }}>{regs.length}</div>
+                    <div style={{ fontSize: 24, fontWeight: 900, color: "#fff", marginTop: 2 }}>
+                      {totalRegistrationsCount}
+                    </div>
                   </div>
 
                   <div
@@ -628,9 +725,11 @@ export default function FacultyRegistrations() {
                     }}
                   >
                     <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
-                      Pending
+                      Branches
                     </div>
-                    <div style={{ fontSize: 18, fontWeight: 800, color: "#f59e0b" }}>{pendingCount}</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: "#06b6d4" }}>
+                      {dynamicBranches.length}
+                    </div>
                   </div>
 
                   <div
@@ -658,25 +757,57 @@ export default function FacultyRegistrations() {
                     }}
                   >
                     <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+                      Pending
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: "#f59e0b" }}>{pendingCount}</div>
+                  </div>
+
+                  <div
+                    style={{
+                      background: "var(--bg-glass)",
+                      padding: "10px 16px",
+                      borderRadius: 14,
+                      border: "1px solid var(--border-color)",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
                       Cancelled
                     </div>
                     <div style={{ fontSize: 18, fontWeight: 800, color: "var(--danger)" }}>{cancelledCount}</div>
                   </div>
 
+                  <div
+                    style={{
+                      background: "var(--bg-glass)",
+                      padding: "10px 16px",
+                      borderRadius: 14,
+                      border: "1px solid var(--border-color)",
+                      textAlign: "center",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 600 }}>
+                      Remaining Spots
+                    </div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: "var(--info)" }}>
+                      {capacity?.remainingSeats !== undefined ? capacity.remainingSeats : selectedEvent?.available_seats ?? "—"}
+                    </div>
+                  </div>
+
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => handleExport("all")}
-                      title="Download all registrations CSV"
-                    >
-                      <FiDownload size={13} /> Export All CSV
-                    </button>
                     <button
                       className="btn btn-primary btn-sm"
                       onClick={() => handleExport("approved")}
-                      title="Download approved registrations CSV"
+                      title="Download Approved Students Official PDF Report"
                     >
-                      <FiDownload size={13} /> Approved CSV
+                      <FiDownload size={13} /> Approved PDF Report
+                    </button>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => handleExport("all")}
+                      title="Download Complete Event Registrations PDF"
+                    >
+                      <FiDownload size={13} /> Export All PDF
                     </button>
                   </div>
                 </div>
@@ -684,7 +815,214 @@ export default function FacultyRegistrations() {
             </div>
           )}
 
-          {/* Filter Tabs & Search Bar */}
+          {/* ========================================================================= */}
+          {/* BRANCH-WISE REGISTRATIONS & DYNAMIC ANALYTICS SECTION                     */}
+          {/* ========================================================================= */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <FiLayers size={18} color="#8b5cf6" />
+                <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: "var(--text-primary)" }}>
+                  Branch-Wise Registrations
+                </h2>
+                <span className="badge badge-info" style={{ fontSize: 11 }}>
+                  {dynamicBranches.length} {dynamicBranches.length === 1 ? "Branch" : "Branches"} Active
+                </span>
+              </div>
+
+              {selectedBranch !== "all" && (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => setSelectedBranch("all")}
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                >
+                  <FiX size={12} /> Clear Branch Filter
+                </button>
+              )}
+            </div>
+
+            {dynamicBranches.length === 0 ? (
+              <div
+                className="glass-card"
+                style={{
+                  padding: "20px",
+                  borderRadius: "16px",
+                  textAlign: "center",
+                  color: "var(--text-muted)",
+                  fontSize: 13,
+                }}
+              >
+                No registrations have been submitted yet. Branch participation statistics will populate automatically once students register.
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                {/* All Branches Overview Card */}
+                <motion.div
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={() => setSelectedBranch("all")}
+                  className="glass-card"
+                  style={{
+                    padding: "16px",
+                    borderRadius: "16px",
+                    cursor: "pointer",
+                    border:
+                      selectedBranch === "all"
+                        ? "2px solid #8b5cf6"
+                        : "1px solid var(--border-color)",
+                    background:
+                      selectedBranch === "all"
+                        ? "linear-gradient(135deg, rgba(139, 92, 246, 0.16) 0%, rgba(59, 130, 246, 0.08) 100%)"
+                        : "var(--bg-glass)",
+                    boxShadow: selectedBranch === "all" ? "0 0 16px rgba(139, 92, 246, 0.25)" : "none",
+                    transition: "all 0.2s ease",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                    <span style={{ fontWeight: 700, fontSize: 14, color: "var(--text-primary)" }}>
+                      All Branches
+                    </span>
+                    <span
+                      className="badge"
+                      style={{
+                        background: selectedBranch === "all" ? "#8b5cf6" : "rgba(255,255,255,0.08)",
+                        color: "#fff",
+                        fontWeight: 700,
+                        fontSize: 12,
+                      }}
+                    >
+                      {totalRegistrationsCount} Total
+                    </span>
+                  </div>
+
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>
+                    Overview across all departments
+                  </div>
+
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      color: selectedBranch === "all" ? "#a78bfa" : "var(--text-secondary)",
+                    }}
+                  >
+                    <span>{selectedBranch === "all" ? "✓ Active View" : "View All"}</span>
+                    <FiArrowRight size={13} />
+                  </div>
+                </motion.div>
+
+                {/* Individual Branch Cards */}
+                {dynamicBranches.map((b) => {
+                  const isSelected = selectedBranch.toUpperCase() === b.branch.toUpperCase();
+                  const pct = totalRegistrationsCount > 0 ? Math.round((b.total / totalRegistrationsCount) * 100) : 0;
+
+                  return (
+                    <motion.div
+                      key={b.branch}
+                      whileHover={{ scale: 1.02 }}
+                      whileTap={{ scale: 0.98 }}
+                      onClick={() => setSelectedBranch(isSelected ? "all" : b.branch)}
+                      className="glass-card"
+                      style={{
+                        padding: "16px",
+                        borderRadius: "16px",
+                        cursor: "pointer",
+                        border: isSelected
+                          ? "2px solid #8b5cf6"
+                          : "1px solid var(--border-color)",
+                        background: isSelected
+                          ? "linear-gradient(135deg, rgba(139, 92, 246, 0.18) 0%, rgba(6, 182, 212, 0.08) 100%)"
+                          : "var(--bg-glass)",
+                        boxShadow: isSelected ? "0 0 16px rgba(139, 92, 246, 0.3)" : "none",
+                        transition: "all 0.2s ease",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: "var(--text-primary)" }}>
+                          {b.branch}
+                        </span>
+                        <span
+                          className="badge"
+                          style={{
+                            background: isSelected ? "#8b5cf6" : "rgba(139, 92, 246, 0.15)",
+                            color: isSelected ? "#fff" : "#c4b5fd",
+                            fontWeight: 700,
+                            fontSize: 12,
+                          }}
+                        >
+                          {b.total} ({pct}%)
+                        </span>
+                      </div>
+
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11, marginBottom: 12 }}>
+                        <span style={{ color: "var(--success)" }}>✓ {b.approved} Approved</span>
+                        <span style={{ color: "#f59e0b" }}>⏱ {b.pending} Pending</span>
+                        {b.cancelled > 0 && <span style={{ color: "var(--danger)" }}>✕ {b.cancelled}</span>}
+                      </div>
+
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          fontSize: 12,
+                          fontWeight: 600,
+                          color: isSelected ? "#a78bfa" : "var(--text-secondary)",
+                        }}
+                      >
+                        <span>{isSelected ? "Filtered By Branch" : "View Registrations"}</span>
+                        <FiArrowRight size={13} />
+                      </div>
+                    </motion.div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Active Branch Filter Banner */}
+          {selectedBranch !== "all" && (
+            <div
+              className="glass-card"
+              style={{
+                padding: "10px 16px",
+                borderRadius: "14px",
+                marginBottom: 18,
+                background: "rgba(139, 92, 246, 0.12)",
+                border: "1px solid rgba(139, 92, 246, 0.3)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                <FiFilter size={14} color="#8b5cf6" />
+                <span>
+                  Filtering by branch: <strong>{selectedBranch}</strong> ({filteredRegs.length} students)
+                </span>
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                style={{ padding: "3px 8px", fontSize: 11.5 }}
+                onClick={() => setSelectedBranch("all")}
+              >
+                Show All Branches
+              </button>
+            </div>
+          )}
+
+          {/* Filter Tabs & Multi-Field Search Bar */}
           <div
             style={{
               display: "flex",
@@ -695,6 +1033,7 @@ export default function FacultyRegistrations() {
               marginBottom: 18,
             }}
           >
+            {/* Status Tabs */}
             <div
               style={{
                 display: "inline-flex",
@@ -774,11 +1113,12 @@ export default function FacultyRegistrations() {
               </button>
             </div>
 
-            <div style={{ position: "relative", minWidth: 280 }}>
+            {/* Multi-Field Search Input with Working Clear Button */}
+            <div style={{ position: "relative", minWidth: 0, flex: "1 1 240px", maxWidth: 440, width: "100%" }}>
               <input
                 className="form-input"
-                style={{ padding: "8px 14px 8px 34px", fontSize: 13 }}
-                placeholder="Search student, reg no, branch, ticket..."
+                style={{ padding: "9px 36px 9px 36px", fontSize: 13 }}
+                placeholder="Search name, reg no, email, branch, ticket..."
                 value={studentSearch}
                 onChange={(e) => setStudentSearch(e.target.value)}
               />
@@ -793,11 +1133,31 @@ export default function FacultyRegistrations() {
                   pointerEvents: "none",
                 }}
               />
+              {studentSearch && (
+                <button
+                  type="button"
+                  onClick={() => setStudentSearch("")}
+                  style={{
+                    position: "absolute",
+                    right: 12,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    background: "none",
+                    border: "none",
+                    color: "var(--text-muted)",
+                    cursor: "pointer",
+                    padding: 2,
+                  }}
+                  title="Clear search"
+                >
+                  <FiX size={15} />
+                </button>
+              )}
             </div>
           </div>
 
           {/* Student Registrations Table */}
-          <div className="glass-card table-wrap" style={{ borderRadius: "20px", overflow: "hidden" }}>
+          <div className="glass-card table-wrap" style={{ borderRadius: "20px" }}>
             <table className="data-table">
               <thead>
                 <tr>
@@ -821,9 +1181,24 @@ export default function FacultyRegistrations() {
                         icon={<FiUsers />}
                         title="No registrations found"
                         message={
-                          studentSearch || activeFilter !== "all"
+                          studentSearch || activeFilter !== "all" || selectedBranch !== "all"
                             ? "No student applications match your current search/filter."
                             : "No students have registered for this event yet."
+                        }
+                        action={
+                          (studentSearch || activeFilter !== "all" || selectedBranch !== "all") && (
+                            <button
+                              type="button"
+                              className="btn btn-outline btn-sm"
+                              onClick={() => {
+                                setStudentSearch("");
+                                setActiveFilter("all");
+                                setSelectedBranch("all");
+                              }}
+                            >
+                              Reset All Filters
+                            </button>
+                          )
                         }
                       />
                     </td>
@@ -852,7 +1227,11 @@ export default function FacultyRegistrations() {
                             {r.student?.registration_number || "—"}
                           </span>
                         </td>
-                        <td>{r.student?.department || "General"}</td>
+                        <td>
+                          <span className="badge badge-info" style={{ fontSize: 11.5 }}>
+                            {r.student?.department || "General"}
+                          </span>
+                        </td>
                         <td>{r.student?.semester ? `Sem ${r.student.semester}` : "—"}</td>
                         <td>
                           <span style={{ fontSize: 12.5 }}>{formatDate(r.registered_at)}</span>
@@ -1011,6 +1390,7 @@ export default function FacultyRegistrations() {
 
           <div style={{ fontSize: 13.5, color: "var(--text-secondary)", marginBottom: 18, lineHeight: 1.6 }}>
             <div><strong>Student:</strong> {approveTarget?.student?.name || "Student"} ({approveTarget?.student?.registration_number})</div>
+            <div><strong>Branch:</strong> {approveTarget?.student?.department || "General"}</div>
             <div><strong>Event:</strong> {selectedEvent?.title}</div>
             <div><strong>Email:</strong> {approveTarget?.student?.email}</div>
           </div>
@@ -1087,6 +1467,7 @@ export default function FacultyRegistrations() {
 
           <div style={{ fontSize: 13.5, color: "var(--text-secondary)", marginBottom: 18, lineHeight: 1.6 }}>
             <div><strong>Student:</strong> {cancelTarget?.student?.name || "Student"} ({cancelTarget?.student?.registration_number})</div>
+            <div><strong>Branch:</strong> {cancelTarget?.student?.department || "General"}</div>
             <div><strong>Event:</strong> {selectedEvent?.title}</div>
             <div><strong>Email:</strong> {cancelTarget?.student?.email}</div>
           </div>

@@ -29,9 +29,9 @@ export default function Sidebar({ items, role, open, onClose }) {
         />
       )}
 
-      {/* Floating Glass Sidebar Island */}
+      {/* Glass Sidebar Island */}
       <aside
-        className={`app-sidebar float-sidebar ${open ? "open" : ""}`}
+        className={`app-sidebar ${open ? "open" : ""}`}
         style={{
           width: 260,
           minWidth: 260,
@@ -336,20 +336,36 @@ export default function Sidebar({ items, role, open, onClose }) {
           @media (max-width: 900px) {
             .app-sidebar {
               position: fixed !important;
-              left: -300px;
+              left: 0 !important;
               top: 0 !important;
+              bottom: 0 !important;
               height: 100vh !important;
+              height: 100dvh !important;
+              width: 280px !important;
+              max-width: 86vw !important;
               margin: 0 !important;
               border-radius: 0 24px 24px 0 !important;
               z-index: 200 !important;
-              transition: left 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
+              transform: translateX(-105%) !important;
+              transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1) !important;
               box-shadow: 0 0 50px rgba(0, 0, 0, 0.5) !important;
+              padding-top: max(12px, env(safe-area-inset-top, 0px)) !important;
+              padding-bottom: max(16px, env(safe-area-inset-bottom, 0px)) !important;
             }
             .app-sidebar.open {
-              left: 0 !important;
+              transform: translateX(0) !important;
             }
             .sidebar-close {
-              display: block !important;
+              display: flex !important;
+              align-items: center;
+              justify-content: center;
+              min-width: 44px;
+              min-height: 44px;
+              width: 44px;
+              height: 44px;
+              border-radius: 12px;
+              background: rgba(255, 255, 255, 0.08);
+              color: var(--text-primary) !important;
             }
           }
         `}</style>

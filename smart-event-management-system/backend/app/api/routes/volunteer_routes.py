@@ -14,6 +14,7 @@ from app.schemas.volunteer_schema import (
     AttendanceConfirmResponse,
     VolunteerDashboardStats,
 )
+from app.services.websocket_manager import notify_clients_sync
 from app.services.email_service import (
     send_attendance_confirmed_student_email,
     send_attendance_confirmed_faculty_email,
@@ -125,6 +126,18 @@ def confirm_attendance(
                 )
             except Exception as e:
                 logger.error("[EMAIL ERROR] Exception sending faculty attendance notification email: %s", e)
+
+    # Real-time WebSocket broadcast: attendance checked in
+    notify_clients_sync({
+        "type": "ATTENDANCE_CHECKED_IN",
+        "registration_id": payload.registration_id,
+        "event_id": reg.event_id,
+        "student_id": reg.student_id,
+        "status": "attended",
+        "checked_in_at": now_str,
+        "checked_in_by": vol_name,
+        "ticket_code": reg.ticket_code,
+    }, event_id=reg.event_id)
 
     return AttendanceConfirmResponse(
         message="Attendance Confirmed",

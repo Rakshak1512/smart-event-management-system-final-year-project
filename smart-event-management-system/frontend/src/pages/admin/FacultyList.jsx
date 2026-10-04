@@ -12,6 +12,7 @@ import {
   FiCheckCircle,
   FiBriefcase,
   FiCalendar,
+  FiX,
 } from "react-icons/fi";
 import { motion } from "framer-motion";
 import Modal from "../../components/ui/Modal.jsx";
@@ -20,7 +21,7 @@ import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { adminService, eventService } from "../../api/services.js";
 import { formatDate } from "../../utils/format.js";
-import { exportToCSV } from "../../utils/exportUtils.js";
+import { generateCustomReportPDF } from "../../utils/pdfReportGenerator.js";
 
 export default function FacultyList() {
   const [faculty, setFaculty] = useState([]);
@@ -130,38 +131,61 @@ export default function FacultyList() {
     }
   };
 
-  const handleExportCSV = () => {
-    const filename = "faculty-directory.csv";
-    const headers = [
-      "Faculty ID",
-      "Full Name",
-      "Email Address",
-      "Phone",
-      "Department",
-      "Active Tasks",
-      "Completed Tasks",
-      "Total Assigned Tasks",
-      "Events Organized",
-      "Email Verified",
-      "Joined Date",
+  const handleExportPDF = () => {
+    if (!faculty || faculty.length === 0) {
+      toast.error("No faculty records available to export");
+      return;
+    }
+
+    const filename = `EventSphere_Faculty_Directory_${new Date().toISOString().split("T")[0]}.pdf`;
+    const depts = Array.from(new Set(faculty.map((f) => f.department).filter(Boolean)));
+    const totalActiveTasks = faculty.reduce((acc, f) => acc + (Number(f.active_tasks_count) || 0), 0);
+    const totalCompletedTasks = faculty.reduce((acc, f) => acc + (Number(f.completed_tasks_count) || 0), 0);
+    const totalEvents = faculty.reduce((acc, f) => acc + (Number(f.events_organized_count) || 0), 0);
+
+    const reportColumns = [
+      { key: "regNo", header: "Faculty ID" },
+      { key: "name", header: "Full Name" },
+      { key: "email", header: "Email Address" },
+      { key: "department", header: "Department" },
+      { key: "phone", header: "Contact No." },
+      { key: "activeTasks", header: "Active Tasks" },
+      { key: "eventsOrg", header: "Events Org." },
+      { key: "joined", header: "Joined Date" },
     ];
 
-    const rows = faculty.map((f) => [
-      f.registration_number || `FAC-${f.id}`,
-      f.name,
-      f.email,
-      f.phone || "N/A",
-      f.department || "General",
-      f.active_tasks_count || 0,
-      f.completed_tasks_count || 0,
-      f.total_assigned_tasks || 0,
-      f.events_organized_count || 0,
-      f.is_email_verified ? "Yes" : "No",
-      formatDate(f.created_at),
-    ]);
+    const reportData = faculty.map((f) => ({
+      regNo: f.registration_number || `FAC-${f.id}`,
+      name: f.name || "N/A",
+      email: f.email || "N/A",
+      department: f.department || "General",
+      phone: f.phone || "N/A",
+      activeTasks: String(f.active_tasks_count || 0),
+      eventsOrg: String(f.events_organized_count || 0),
+      joined: formatDate(f.created_at) || "N/A",
+    }));
 
-    exportToCSV(filename, headers, rows);
-    toast.success(`Exported ${rows.length} faculty profiles to CSV`);
+    generateCustomReportPDF({
+      title: "Faculty Directory & Academic Staff",
+      subtitle: "Official Institutional Roster & Department Task Allocation Records",
+      filename,
+      orientation: "landscape",
+      metadata: [
+        { label: "Generated Date", value: new Date().toLocaleDateString() },
+        { label: "Total Faculty", value: `${faculty.length} Members` },
+        { label: "Departments", value: `${depts.length} Active` },
+      ],
+      summaryMetrics: [
+        { label: "Total Faculty", value: faculty.length },
+        { label: "Active Directives", value: totalActiveTasks },
+        { label: "Completed Tasks", value: totalCompletedTasks },
+        { label: "Events Supervised", value: totalEvents },
+      ],
+      columns: reportColumns,
+      data: reportData,
+    });
+
+    toast.success(`Exported ${faculty.length} faculty profiles to PDF`);
   };
 
   return (
@@ -174,8 +198,8 @@ export default function FacultyList() {
           </p>
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <button className="btn btn-outline btn-sm" onClick={handleExportCSV}>
-            <FiDownload size={14} /> Export Directory CSV
+          <button className="btn btn-outline btn-sm" onClick={handleExportPDF}>
+            <FiDownload size={14} /> Download Directory PDF
           </button>
           <button
             className="icon-btn"
@@ -234,10 +258,10 @@ export default function FacultyList() {
           ))}
         </div>
 
-        <div style={{ position: "relative", minWidth: 260 }}>
+        <div style={{ position: "relative", minWidth: 0, width: "100%", maxWidth: 360 }}>
           <input
             className="form-input"
-            style={{ padding: "8px 14px 8px 34px", fontSize: 13 }}
+            style={{ padding: "8px 34px 8px 34px", fontSize: 13 }}
             placeholder="Search by faculty name, email, ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -248,10 +272,31 @@ export default function FacultyList() {
               position: "absolute",
               left: 12,
               top: "50%",
-              transform: "translateY(-50)",
+              transform: "translateY(-50%)",
               color: "var(--text-muted)",
+              pointerEvents: "none",
             }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              style={{
+                position: "absolute",
+                right: 12,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                cursor: "pointer",
+                padding: 2,
+              }}
+              title="Clear search"
+            >
+              <FiX size={14} />
+            </button>
+          )}
         </div>
       </div>
 

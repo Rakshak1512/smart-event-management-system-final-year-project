@@ -9,6 +9,7 @@ from app.models.registration import RegistrationStatus
 from app.models.user import RoleEnum, User
 from app.schemas.event_schema import EventCapacityOut
 from app.schemas.registration_schema import (
+    BranchStatsOut,
     RegistrationCreate,
     RegistrationOut,
     RegistrationStatusUpdate,
@@ -16,7 +17,9 @@ from app.schemas.registration_schema import (
     TeamCreate,
     TeamOut,
 )
+from app.services.websocket_manager import notify_clients_sync
 from app.utils.email_utils import (
+    send_registration_approved_email,
     send_registration_cancellation_email,
     send_registration_confirmation_email,
 )
@@ -141,7 +144,19 @@ def register_for_event(
     except Exception as e:
         logger.error("[EMAIL ERROR] Exception during registration confirmation email dispatch to %s: %s", current_user.email, e)
 
-    return db_service.get_registration_by_id(registration.id)
+    fresh_reg = db_service.get_registration_by_id(registration.id)
+
+    # Real-time WebSocket broadcast: new registration created
+    notify_clients_sync({
+        "type": "REGISTRATION_CREATED",
+        "registration_id": fresh_reg.id,
+        "event_id": event.id,
+        "student_id": current_user.id,
+        "status": fresh_reg.status.value if hasattr(fresh_reg.status, "value") else str(fresh_reg.status),
+        "ticket_code": fresh_reg.ticket_code,
+    }, event_id=event.id)
+
+    return fresh_reg
 
 
 @router.get("/my", response_model=list[RegistrationOut])
@@ -202,13 +217,38 @@ def cancel_registration(
     registration_id: int,
     current_user: User = Depends(require_role(RoleEnum.student)),
 ):
+    reg = db_service.get_registration_by_id(registration_id)
     success, msg = db_service.cancel_registration_by_student(registration_id, current_user.id)
     if not success:
         if "not found" in msg.lower():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=msg)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=msg)
 
+    # Real-time WebSocket broadcast: student cancelled registration
+    if reg:
+        notify_clients_sync({
+            "type": "REGISTRATION_CANCELLED",
+            "registration_id": registration_id,
+            "event_id": reg.event_id,
+            "student_id": current_user.id,
+            "status": "cancelled",
+        }, event_id=reg.event_id)
+
     return {"message": "Registration cancelled successfully"}
+
+
+@router.get("/event/{event_id}/branch-stats", response_model=BranchStatsOut)
+def get_event_branch_stats_endpoint(
+    event_id: int,
+    current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin, RoleEnum.volunteer)),
+):
+    """
+    Returns real-time dynamic branch-wise registration statistics for an event.
+    """
+    event = db_service.get_event_by_id(event_id)
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
+    return db_service.get_event_branch_stats(event_id)
 
 
 @router.get("/{registration_id}/slip")
@@ -241,13 +281,23 @@ def download_slip(
 @router.get("/event/{event_id}", response_model=list[RegistrationOut])
 def event_registrations(
     event_id: int,
+    search: str | None = None,
+    branch: str | None = None,
+    status: str | None = None,
+    semester: str | None = None,
     current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
 ):
     event = db_service.get_event_by_id(event_id)
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event not found")
 
-    return db_service.get_event_registrations(event_id)
+    return db_service.get_event_registrations(
+        event_id=event_id,
+        search=search,
+        branch=branch,
+        status=status,
+        semester=semester,
+    )
 
 
 @router.get("/event/{event_id}/capacity", response_model=EventCapacityOut)
@@ -318,5 +368,15 @@ def update_registration_status(
             )
         except Exception as e:
             logger.error("[EMAIL ERROR] Exception during cancellation email dispatch to %s: %s", student.email, e, exc_info=True)
+
+    # Real-time WebSocket broadcast: registration status changed
+    notify_clients_sync({
+        "type": "REGISTRATION_STATUS_CHANGED",
+        "registration_id": updated_reg.id,
+        "event_id": updated_reg.event_id,
+        "student_id": updated_reg.student_id,
+        "status": updated_reg.status.value if hasattr(updated_reg.status, "value") else str(updated_reg.status),
+        "ticket_code": updated_reg.ticket_code,
+    }, event_id=updated_reg.event_id)
 
     return updated_reg

@@ -12,7 +12,7 @@ class RegistrationStatus(str, enum.Enum):
     completed = "completed"
 
 
-SEAT_OCCUPYING_STATUSES = {
+ACTIVE_REGISTRATION_STATUSES = {
     RegistrationStatus.registered.value,
     RegistrationStatus.pending.value,
     RegistrationStatus.approved.value,
@@ -21,11 +21,15 @@ SEAT_OCCUPYING_STATUSES = {
     "confirmed",
 }
 
-NON_SEAT_OCCUPYING_STATUSES = {
+INACTIVE_REGISTRATION_STATUSES = {
     RegistrationStatus.cancelled.value,
     "rejected",
     "waitlisted",
 }
+
+# Backward compatibility aliases
+SEAT_OCCUPYING_STATUSES = ACTIVE_REGISTRATION_STATUSES
+NON_SEAT_OCCUPYING_STATUSES = INACTIVE_REGISTRATION_STATUSES
 
 
 class Registration:
@@ -46,6 +50,7 @@ class Registration:
         checked_in_at: Optional[datetime] = None,
         checked_in_by: Optional[str] = None,
         checked_in_by_id: Optional[int] = None,
+        **kwargs,
     ):
         self.id = int(id) if id is not None else None
         self.event_id = int(event_id) if event_id is not None else None
@@ -59,7 +64,6 @@ class Registration:
         self.team_id = int(team_id) if team_id is not None else None
         self.team_name = team_name
         self.team_role = team_role
-        self.seat_number = None
         self.checked_in_at = checked_in_at
         self.checked_in_by = checked_in_by
         self.checked_in_by_id = int(checked_in_by_id) if checked_in_by_id is not None else None
@@ -82,7 +86,7 @@ class Registration:
         }
 
     @classmethod
-    def from_dict(cls, data: dict, event=None, student=None) -> "Registration":
+    def from_dict(cls, data: dict, event=None, student=None) -> Optional["Registration"]:
         if not data:
             return None
         reg_at = data.get("registered_at")
@@ -116,3 +120,4 @@ class Registration:
             checked_in_by=data.get("checked_in_by"),
             checked_in_by_id=data.get("checked_in_by_id"),
         )
+
