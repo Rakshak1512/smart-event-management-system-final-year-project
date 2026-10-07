@@ -3,6 +3,8 @@ import api, { API_BASE_URL } from "./axios.js";
 /* ---------------- Auth ---------------- */
 export const authService = {
   register: (payload) => api.post("/auth/register", payload),
+  firebaseRegister: (payload) => api.post("/auth/firebase/register", payload),
+  firebaseSession: (payload) => api.post("/auth/firebase/session", payload),
   verifyEmail: (payload) => api.post("/auth/verify-email", payload),
   resendOtp: (payload) => api.post("/auth/resend-verification-otp", payload),
   login: (payload) => api.post("/auth/login", payload),
