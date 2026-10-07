@@ -5,6 +5,7 @@ import { FiArrowLeft, FiCalendar, FiCheckCircle, FiLock, FiMail } from "react-ic
 import ThemeToggle from "../../components/common/ThemeToggle.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import { sendFirebasePasswordReset } from "../../lib/firebase.js";
+import { authService } from "../../api/services.js";
 
 export default function ForgotPassword() {
   const navigate = useNavigate();
@@ -28,7 +29,13 @@ export default function ForgotPassword() {
     } catch (err) {
       const code = err?.code || "";
       if (code === "auth/user-not-found") {
-        // Keep account enumeration private and show the same user-facing result.
+        // Migrate an existing EventSphere account into Firebase Auth, then retry.
+        await authService.prepareFirebasePasswordReset({ email: cleanEmail });
+        try {
+          await sendFirebasePasswordReset(cleanEmail);
+        } catch {
+          // Keep the response generic for account privacy.
+        }
         setSent(true);
         toast.success("If an account exists for that email, a reset link has been sent.");
       } else {
