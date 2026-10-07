@@ -1,12 +1,17 @@
 import { initializeApp } from "firebase/app";
 import {
   browserLocalPersistence,
+  createUserWithEmailAndPassword,
   getAuth,
-  isSignInWithEmailLink,
+  sendEmailVerification,
+  sendPasswordResetEmail,
   sendSignInLinkToEmail,
   setPersistence,
+  signInWithEmailAndPassword,
   signInWithEmailLink,
   signOut,
+  isSignInWithEmailLink,
+  updateProfile,
 } from "firebase/auth";
 
 const firebaseConfig = {
@@ -31,36 +36,65 @@ if (firebaseConfigured) {
 
 export const firebaseAuth = auth;
 
-const REGISTER_EMAIL_KEY = "eventsphere.firebase.register.email";
-const LOGIN_EMAIL_KEY = "eventsphere.firebase.login.email";
+const LOGIN_EMAIL_KEY = "eventsphere.firebase.email-link";
 
-export async function sendFirebaseEmailLink(email, flow = "login") {
+function ensureConfigured() {
   if (!firebaseAuth) {
     throw new Error("Firebase Authentication is not configured. Add the VITE_FIREBASE_* environment variables.");
   }
+}
 
-  const cleanEmail = String(email || "").trim().toLowerCase();
-  if (!/^\S+@\S+\.\S+$/.test(cleanEmail)) {
-    throw new Error("Enter a valid email address.");
+export async function registerFirebaseUser(email, password, name) {
+  ensureConfigured();
+  const credential = await createUserWithEmailAndPassword(firebaseAuth, email.trim().toLowerCase(), password);
+  if (name?.trim()) {
+    await updateProfile(credential.user, { displayName: name.trim() });
   }
+  await sendFirebaseVerificationEmail();
+  return credential.user;
+}
 
-  const path = flow === "register" ? "/verify-email" : "/login";
-  const actionCodeSettings = {
-    url: `${window.location.origin}${path}`,
+export async function signInFirebaseUser(email, password) {
+  ensureConfigured();
+  const credential = await signInWithEmailAndPassword(firebaseAuth, email.trim().toLowerCase(), password);
+  return credential.user;
+}
+
+export async function sendFirebaseVerificationEmail() {
+  ensureConfigured();
+  if (!firebaseAuth.currentUser) throw new Error("No signed-in Firebase user.");
+  await sendEmailVerification(firebaseAuth.currentUser, {
+    url: `${window.location.origin}/verify-email`,
+    handleCodeInApp: false,
+  });
+}
+
+export async function reloadFirebaseUser() {
+  ensureConfigured();
+  if (!firebaseAuth.currentUser) return null;
+  await firebaseAuth.currentUser.reload();
+  return firebaseAuth.currentUser;
+}
+
+export async function sendFirebasePasswordReset(email) {
+  ensureConfigured();
+  await sendPasswordResetEmail(firebaseAuth, email.trim().toLowerCase());
+}
+
+export async function getFirebaseIdToken(forceRefresh = true) {
+  ensureConfigured();
+  if (!firebaseAuth.currentUser) throw new Error("No signed-in Firebase user.");
+  return firebaseAuth.currentUser.getIdToken(forceRefresh);
+}
+
+export async function sendFirebaseEmailLink(email) {
+  ensureConfigured();
+  const cleanEmail = email.trim().toLowerCase();
+  await sendSignInLinkToEmail(firebaseAuth, cleanEmail, {
+    url: `${window.location.origin}/login`,
     handleCodeInApp: true,
-  };
-
-  await sendSignInLinkToEmail(firebaseAuth, cleanEmail, actionCodeSettings);
-  localStorage.setItem(flow === "register" ? REGISTER_EMAIL_KEY : LOGIN_EMAIL_KEY, cleanEmail);
-  return cleanEmail;
-}
-
-export function getStoredFirebaseEmail(flow = "login") {
-  return localStorage.getItem(flow === "register" ? REGISTER_EMAIL_KEY : LOGIN_EMAIL_KEY) || "";
-}
-
-export function clearStoredFirebaseEmail(flow = "login") {
-  localStorage.removeItem(flow === "register" ? REGISTER_EMAIL_KEY : LOGIN_EMAIL_KEY);
+  });
+  localStorage.setItem(LOGIN_EMAIL_KEY, cleanEmail);
 }
 
 export function isFirebaseEmailLink() {
@@ -68,22 +102,17 @@ export function isFirebaseEmailLink() {
 }
 
 export async function completeFirebaseEmailLink(email) {
-  if (!firebaseAuth) {
-    throw new Error("Firebase Authentication is not configured.");
-  }
-
-  const cleanEmail = String(email || "").trim().toLowerCase();
-  if (!cleanEmail) {
-    throw new Error("Enter the email address used to request the verification link.");
-  }
-
+  ensureConfigured();
+  const cleanEmail = email.trim().toLowerCase();
   const credential = await signInWithEmailLink(firebaseAuth, cleanEmail, window.location.href);
-  const idToken = await credential.user.getIdToken(true);
-  return { user: credential.user, idToken };
+  localStorage.removeItem(LOGIN_EMAIL_KEY);
+  return credential.user;
+}
+
+export function getStoredFirebaseLinkEmail() {
+  return localStorage.getItem(LOGIN_EMAIL_KEY) || "";
 }
 
 export async function signOutFirebase() {
-  if (firebaseAuth) {
-    await signOut(firebaseAuth);
-  }
+  if (firebaseAuth?.currentUser) await signOut(firebaseAuth);
 }
