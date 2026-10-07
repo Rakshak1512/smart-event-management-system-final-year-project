@@ -3,6 +3,7 @@ import logging
 import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from firebase_admin import auth as firebase_auth_admin
 
 from app.core.config import settings
 from app.core.firebase_auth import verify_firebase_id_token
@@ -455,6 +456,34 @@ def login(payload: UserLogin, request: Request):
 
     if not user.is_email_verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email first")
+
+    # Migrate existing EventSphere password accounts into Firebase Authentication
+    # on the first successful legacy login. Firebase becomes the long-term
+    # credential provider without breaking existing users.
+    try:
+        firebase_user = None
+        try:
+            firebase_user = firebase_auth_admin.get_user_by_email(clean_email)
+        except firebase_auth_admin.UserNotFoundError:
+            firebase_user = None
+
+        if firebase_user:
+            firebase_auth_admin.update_user(
+                firebase_user.uid,
+                password=payload.password,
+                email_verified=True,
+                display_name=user.name,
+            )
+        else:
+            firebase_auth_admin.create_user(
+                email=clean_email,
+                password=payload.password,
+                email_verified=True,
+                display_name=user.name,
+            )
+        logger.info("Firebase account synchronized after legacy password login for %s", _mask_email(clean_email))
+    except Exception as e:
+        logger.warning("Firebase account synchronization skipped for %s: %s", _mask_email(clean_email), e)
 
     access_expires = timedelta(days=30) if payload.remember_me else None
     role_val = user.role.value if hasattr(user.role, "value") else str(user.role)
