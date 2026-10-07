@@ -24,6 +24,7 @@ from app.schemas.user_schema import (
     ForgotPasswordRequest,
     FirebaseRegisterRequest,
     FirebaseSessionRequest,
+    FirebasePasswordResetPrepareRequest,
     ResendOtpRequest,
     ResetPasswordRequest,
     Token,
@@ -127,6 +128,33 @@ def firebase_register(payload: FirebaseRegisterRequest, request: Request):
     except Exception as e:
         logger.exception("Firebase registration failed for %s", _mask_email(clean_email))
         raise HTTPException(status_code=500, detail="Unable to create your EventSphere profile")
+
+
+@router.post("/firebase/prepare-password-reset")
+def prepare_firebase_password_reset(payload: FirebasePasswordResetPrepareRequest):
+    """Provision a Firebase password account for a legacy EventSphere user before reset."""
+    clean_email = payload.email.strip().lower()
+    user = db_service.get_user_by_email(clean_email)
+
+    # Never reveal whether an email exists in EventSphere.
+    if not user:
+        return {"ready": True}
+
+    try:
+        try:
+            firebase_user = firebase_auth_admin.get_user_by_email(clean_email)
+        except firebase_auth_admin.UserNotFoundError:
+            firebase_user = firebase_auth_admin.create_user(
+                email=clean_email,
+                password=secrets.token_urlsafe(24),
+                email_verified=bool(user.is_email_verified),
+                display_name=user.name,
+            )
+        return {"ready": True, "firebase_user_exists": True}
+    except Exception as e:
+        logger.warning("Firebase reset preparation failed for %s: %s", _mask_email(clean_email), e)
+        # Keep the response generic; the frontend will show the standard reset message.
+        return {"ready": True}
 
 
 @router.post("/firebase/session", response_model=Token)
