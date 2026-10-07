@@ -114,8 +114,17 @@ def health_check():
 
 @app.get("/api/health/email", tags=["Health"])
 def email_health_check():
+    provider = (settings.EMAIL_PROVIDER or "auto").strip().lower()
+    resend_configured = bool(settings.RESEND_API_KEY and settings.RESEND_FROM_EMAIL)
+    smtp_configured = bool(settings.SMTP_USER and settings.SMTP_PASSWORD)
+    active_provider = "resend" if provider == "resend" or (provider == "auto" and resend_configured) else "smtp"
+    active_configured = resend_configured if active_provider == "resend" else smtp_configured
     return {
-        "status": "configured" if (settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD) else "not_configured",
+        "status": "configured" if active_configured else "not_configured",
+        "provider": active_provider,
+        "resend_configured": resend_configured,
+        "resend_from_email_configured": bool(settings.RESEND_FROM_EMAIL),
+        "smtp_configured": smtp_configured,
         "smtp_host": settings.SMTP_HOST,
         "smtp_port": settings.SMTP_PORT,
         "from_email_configured": bool(settings.SMTP_FROM_EMAIL or settings.SMTP_USER),
