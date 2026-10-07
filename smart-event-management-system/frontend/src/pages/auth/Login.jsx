@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
-import { FiMail, FiLock, FiEye, FiEyeOff, FiCalendar, FiCheckCircle } from "react-icons/fi";
+import { FiMail, FiLock, FiEye, FiEyeOff, FiCalendar, FiCheckCircle, FiArrowLeft } from "react-icons/fi";
 import ThemeToggle from "../../components/common/ThemeToggle.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import OTPInput from "../../components/common/OTPInput.jsx";
@@ -248,7 +248,36 @@ export default function Login() {
             zIndex: 2,
           }}
         >
-          {/* Header */}
+          {/* Back button */}
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.length > 1) navigate(-1);
+            else navigate("/");
+          }}
+          aria-label="Go back"
+          title="Go back"
+          style={{
+            position: "absolute",
+            top: 18,
+            left: 18,
+            width: 38,
+            height: 38,
+            borderRadius: 11,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg-glass)",
+            border: "1px solid var(--border-color)",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            zIndex: 3,
+          }}
+        >
+          <FiArrowLeft size={17} />
+        </button>
+
+        {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 20 }}>
             <Link
               to="/"
