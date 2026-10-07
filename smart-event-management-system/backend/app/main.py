@@ -35,13 +35,13 @@ logger = logging.getLogger("app")
 
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"])
 
-app.add_middleware(GZipMiddleware, minimum_size=800)
-
 app = FastAPI(
     title=settings.APP_NAME,
     description="REST API for the Smart Event Management System (Firebase Edition)",
     version="1.0.0",
 )
+
+app.add_middleware(GZipMiddleware, minimum_size=800)
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
