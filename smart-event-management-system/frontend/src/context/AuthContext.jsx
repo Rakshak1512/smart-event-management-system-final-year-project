@@ -47,22 +47,48 @@ export function AuthProvider({ children }) {
 
   const login = async ({ email, password, role, remember_me }) => {
     if (!firebaseConfigured) throw new Error("Firebase Authentication is not configured.");
-    const firebaseUser = await signInFirebaseUser(email, password);
 
-    if (!firebaseUser.emailVerified) {
-      throw new Error("Please verify your email first. Check your inbox for the Firebase verification link.");
+    try {
+      const firebaseUser = await signInFirebaseUser(email, password);
+
+      if (!firebaseUser.emailVerified) {
+        throw new Error("Please verify your email first. Check your inbox for the Firebase verification link.");
+      }
+
+      const idToken = await firebaseUser.getIdToken(true);
+      const { data } = await api.post("/auth/firebase/session", {
+        id_token: idToken,
+        role,
+        remember_me,
+      });
+
+      persistSession(data);
+      setUser(data.user);
+      return data.user;
+    } catch (firebaseError) {
+      // Existing EventSphere accounts may predate Firebase Authentication.
+      // Fall back once to the legacy API; a successful legacy login automatically
+      // provisions/synchronizes the Firebase account on the backend.
+      const code = firebaseError?.code || "";
+      const allowLegacyFallback = [
+        "auth/user-not-found",
+        "auth/invalid-credential",
+        "auth/invalid-login-credentials",
+        "auth/operation-not-allowed",
+      ].includes(code);
+
+      if (!allowLegacyFallback) throw firebaseError;
+
+      const { data } = await api.post("/auth/login", {
+        email,
+        password,
+        role,
+        remember_me,
+      });
+      persistSession(data);
+      setUser(data.user);
+      return data.user;
     }
-
-    const idToken = await firebaseUser.getIdToken(true);
-    const { data } = await api.post("/auth/firebase/session", {
-      id_token: idToken,
-      role,
-      remember_me,
-    });
-
-    persistSession(data);
-    setUser(data.user);
-    return data.user;
   };
 
   const register = async (payload) => {
