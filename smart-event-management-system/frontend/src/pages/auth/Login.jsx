@@ -314,8 +314,7 @@ export default function Login() {
           </div>
 
           {/* METHOD 1: PASSWORD LOGIN */}
-          {authMethod === "password" && (
-            <form onSubmit={handlePasswordSubmit}>
+          <form onSubmit={handlePasswordSubmit}>
               <div className="form-group">
                 <label className="form-label">Email Address</label>
                 <div style={{ position: "relative" }}>
@@ -377,8 +376,7 @@ export default function Login() {
               <button className="btn btn-primary" style={{ width: "100%" }} disabled={submitting}>
                 {submitting ? "Logging in..." : "Login with Password"}
               </button>
-            </form>
-          )}
+          </form>
 
           {/* Footer link to Register */}
           <div style={{ textAlign: "center", marginTop: 22, fontSize: 13.5, color: "var(--text-secondary)" }}>
