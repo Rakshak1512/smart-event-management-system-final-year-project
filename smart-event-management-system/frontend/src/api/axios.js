@@ -1,19 +1,12 @@
 import axios from "axios";
 
-// When accessed from an external device or tunnel, route via relative "/api" through Vite's proxy
-// so external clients never attempt to contact an unreachable localhost URL.
-const isExternalAccess =
-  typeof window !== "undefined" &&
-  window.location.hostname !== "localhost" &&
-  window.location.hostname !== "127.0.0.1";
-
-const rawApiUrl = import.meta.env.VITE_API_URL || "";
-export const API_BASE_URL = isExternalAccess
-  ? "/api"
-  : rawApiUrl
-  ? rawApiUrl.replace(/\/+$/, "").endsWith("/api")
-    ? rawApiUrl.replace(/\/+$/, "")
-    : `${rawApiUrl.replace(/\/+$/, "")}/api`
+// In production, always use the explicitly configured backend URL.
+// A relative /api path breaks when frontend and backend are deployed
+// as separate Vercel/Render services.
+const rawApiUrl = (import.meta.env.VITE_API_URL || "").trim();
+const normalizedApiUrl = rawApiUrl.replace(/\/+$/, "");
+export const API_BASE_URL = normalizedApiUrl
+  ? (normalizedApiUrl.endsWith("/api") ? normalizedApiUrl : `${normalizedApiUrl}/api`)
   : "/api";
 
 const api = axios.create({
