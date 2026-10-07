@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = 60
 
+    # Demo/test accounts. Keep enabled only when demo accounts are desired.
+    SEED_TEST_USERS: bool = False
+
     @property
     def upload_dir_abs(self) -> str:
         if os.path.isabs(self.UPLOAD_DIR):
