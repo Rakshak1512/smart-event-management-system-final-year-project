@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_USE_TLS: bool = True
 
+    # HTTPS email provider (recommended for Render Free)
+    EMAIL_PROVIDER: str = "auto"  # auto | resend | smtp
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = ""
+
     # OTP
     OTP_EXPIRE_MINUTES: int = 10
     OTP_LENGTH: int = 6
