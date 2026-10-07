@@ -4,6 +4,7 @@ import os
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -33,6 +34,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("app")
 
 limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"])
+
+app.add_middleware(GZipMiddleware, minimum_size=800)
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -67,11 +70,12 @@ def on_startup():
     except Exception as e:
         logger.error(f"Error initializing Firebase: {e}")
 
-    try:
-        from app.services.seed_service import seed_test_users
-        seed_test_users()
-    except Exception as e:
-        logger.error(f"Error seeding test users: {e}")
+    if settings.SEED_TEST_USERS:
+        try:
+            from app.services.seed_service import seed_test_users
+            seed_test_users()
+        except Exception as e:
+            logger.error(f"Error seeding test users: {e}")
 
     # Safe SMTP configuration startup validation without exposing passwords
     smtp_loaded = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
@@ -106,6 +110,16 @@ def root():
 @app.get("/api/health", tags=["Health"])
 def health_check():
     return {"status": "healthy", "database": "firestore"}
+
+
+@app.get("/api/health/email", tags=["Health"])
+def email_health_check():
+    return {
+        "status": "configured" if (settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD) else "not_configured",
+        "smtp_host": settings.SMTP_HOST,
+        "smtp_port": settings.SMTP_PORT,
+        "from_email_configured": bool(settings.SMTP_FROM_EMAIL or settings.SMTP_USER),
+    }
 
 
 app.include_router(auth_routes.router)
