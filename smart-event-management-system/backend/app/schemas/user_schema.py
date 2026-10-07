@@ -91,6 +91,10 @@ class FirebaseSessionRequest(BaseModel):
     remember_me: bool = False
 
 
+class FirebasePasswordResetPrepareRequest(BaseModel):
+    email: EmailStr
+
+
 class UserOut(BaseModel):
     id: int
     name: str
