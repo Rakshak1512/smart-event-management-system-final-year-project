@@ -58,7 +58,15 @@ def _send_via_resend(
         )
 
         if 200 <= response.status_code < 300:
-            logger.info("Resend email sent successfully to %s", _mask_email(to_email))
+            try:
+                message_id = response.json().get("id")
+            except Exception:
+                message_id = None
+            logger.info(
+                "Resend email accepted for %s (message_id=%s)",
+                _mask_email(to_email),
+                message_id or "unknown",
+            )
             return True, "Email delivered successfully"
 
         logger.error(
@@ -102,6 +110,13 @@ def send_email_detailed(
 
     masked_to = _mask_email(to_addr)
 
+    # Prefer Resend when explicitly selected or when an API key is configured.
+    # This branch must run BEFORE SMTP validation because Render deployments
+    # using Resend do not need SMTP credentials at all.
+    provider = (settings.EMAIL_PROVIDER or "auto").strip().lower()
+    if provider == "resend" or (provider == "auto" and settings.RESEND_API_KEY):
+        return _send_via_resend(to_addr, subject, html_body, text_body)
+
     host = settings.SMTP_HOST.strip() if settings.SMTP_HOST else "smtp.gmail.com"
     port = settings.SMTP_PORT or 587
     user = settings.SMTP_USER.strip() if settings.SMTP_USER else ""
@@ -114,10 +129,6 @@ def send_email_detailed(
         err_msg = "SMTP credentials not configured (SMTP_HOST, SMTP_USER, or SMTP_PASSWORD is empty)."
         logger.error("SMTP delivery failed: %s (To=%s)", err_msg, masked_to)
         return False, "Unable to send verification email. Please check the email service configuration."
-
-    provider = (settings.EMAIL_PROVIDER or "auto").strip().lower()
-    if provider == "resend" or (provider == "auto" and settings.RESEND_API_KEY):
-        return _send_via_resend(to_addr, subject, html_body, text_body)
 
     sender_header = formataddr((from_name, from_email))
 
