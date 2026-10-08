@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 
 from app.core.security import hash_password, verify_password
 from app.db import firestore_service as db_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_approved_user, get_current_user
 from app.models.user import User
 from app.schemas.user_schema import ChangePassword, EmailUpdateRequest, UserOut, UserUpdate
 from app.utils.file_utils import delete_file_if_exists, save_upload
@@ -10,10 +10,16 @@ from app.utils.file_utils import delete_file_if_exists, save_upload
 router = APIRouter(prefix="/api/users", tags=["User Profile"])
 
 
+@router.get("/me", response_model=UserOut)
+def get_my_profile(current_user: User = Depends(get_current_user)):
+    """Retrieve currently authenticated user profile including live approval status."""
+    return current_user
+
+
 @router.put("/profile", response_model=UserOut)
 def update_profile(
     payload: UserUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     updates = {}
     if payload.name is not None:
@@ -30,7 +36,7 @@ def update_profile(
 @router.post("/profile/picture", response_model=UserOut)
 async def upload_profile_picture(
     file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     new_path = await save_upload(file, "profile_pictures")
     old_path = current_user.profile_picture
@@ -46,7 +52,7 @@ async def upload_profile_picture(
 @router.put("/email", response_model=UserOut)
 def update_email(
     payload: EmailUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     if not verify_password(payload.password, current_user.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Incorrect password")
@@ -65,7 +71,7 @@ def update_email(
 @router.put("/password")
 def change_password(
     payload: ChangePassword,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     if not verify_password(payload.current_password, current_user.hashed_password):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is incorrect")
@@ -79,7 +85,7 @@ def change_password(
 
 @router.delete("/me", status_code=status.HTTP_200_OK)
 def delete_account(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     """
     Deactivates (soft-deletes) the current user's account, preserving historical

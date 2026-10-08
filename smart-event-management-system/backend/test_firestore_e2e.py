@@ -168,6 +168,7 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     res = client.post("/api/auth/verify-email", json={"email": "jane.student@college.edu", "otp_code": otp_code})
     assert res.status_code == 200, f"Email verification failed: {res.text}"
     assert res.json()["is_email_verified"] is True
+    student_id = res.json()["id"]
     print("[PASS] 3. Student email OTP verification -> 200 OK")
 
     # 3. Student Login
@@ -219,6 +220,13 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
         "event_time": "09:00 AM",
         "total_seats": 50,
     }
+    # Pending Faculty cannot create events -> 403 ACCOUNT_PENDING_APPROVAL
+    res = client.post("/api/events", data=event_payload, headers=faculty_headers)
+    assert res.status_code == 403 and res.json()["detail"] == "ACCOUNT_PENDING_APPROVAL", f"Pending faculty should be blocked: {res.text}"
+    print("[PASS] 5b. Pending faculty event creation correctly blocked -> 403 ACCOUNT_PENDING_APPROVAL")
+
+    # Admin approves Faculty
+    db_service.approve_user(faculty_id, approver_id=1)
     res = client.post("/api/events", data=event_payload, headers=faculty_headers)
     assert res.status_code == 201, f"Event creation failed: {res.text}"
     event_data = res.json()
@@ -226,7 +234,7 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     assert event_data["title"] == "Annual AI & Web Hackathon 2026"
     assert event_data["available_seats"] == 50
     assert event_data["organizer_name"] == "Dr. Alan Turing"
-    print("[PASS] 6. Faculty event creation with organizer metadata -> 201 Created")
+    print("[PASS] 6. Approved faculty event creation with organizer metadata -> 201 Created")
 
     # 6. Browse Events & Categories
     res = client.get("/api/events")
@@ -257,7 +265,16 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     res = client.post("/api/auth/login", json={"email": "ada.lovelace@college.edu", "password": "FacultyPassword@123", "role": "faculty"})
     faculty_b_headers = {"Authorization": f"Bearer {res.json()['access_token']}"}
 
-    # Faculty B edits Faculty A's event
+    # Faculty B is pending -> edit rejected with 403 ACCOUNT_PENDING_APPROVAL
+    res = client.put(f"/api/events/{event_id}", data={
+        "venue": "Grand Campus Convention Hall",
+        "description": "Updated description by Faculty B.",
+    }, headers=faculty_b_headers)
+    assert res.status_code == 403 and res.json()["detail"] == "ACCOUNT_PENDING_APPROVAL"
+    print("[PASS] 7a. Pending Faculty B edit correctly blocked -> 403 ACCOUNT_PENDING_APPROVAL")
+
+    # Admin approves Faculty B
+    db_service.approve_user(faculty_b_id, approver_id=1)
     res = client.put(f"/api/events/{event_id}", data={
         "venue": "Grand Campus Convention Hall",
         "description": "Updated description by Faculty B.",
@@ -267,14 +284,22 @@ with patch("app.core.firebase.get_firestore_db", return_value=mock_db), \
     assert updated_ev["venue"] == "Grand Campus Convention Hall"
     assert updated_ev["created_by"] == faculty_id
     assert updated_ev["updated_by"] == faculty_b_id
-    print("[PASS] 7b. Cross-faculty event edit (Faculty B edits Faculty A's event) -> 200 OK")
+    print("[PASS] 7b. Approved Faculty B edits Faculty A's event -> 200 OK")
 
-    # Student attempts to edit event -> 403 Forbidden
+    # Student attempts to edit event -> 403 Forbidden (role permission)
     res = client.put(f"/api/events/{event_id}", data={"venue": "Hacked Hall"}, headers=student_headers)
     assert res.status_code == 403
     print("[PASS] 7c. Student event edit attempt correctly rejected -> 403 Forbidden")
 
-    # 7. Student Event Registration
+    # 7. Pending Student attempts event registration -> 403 ACCOUNT_PENDING_APPROVAL
+    res = client.post("/api/registrations", json={"event_id": event_id}, headers=student_headers)
+    assert res.status_code == 403 and res.json()["detail"] == "ACCOUNT_PENDING_APPROVAL"
+    print("[PASS] 7d. Pending student event registration correctly blocked -> 403 ACCOUNT_PENDING_APPROVAL")
+
+    # Faculty approves student
+    db_service.approve_user(student_id, approver_id=faculty_id)
+
+    # 8. Approved Student Event Registration
     res = client.post("/api/registrations", json={"event_id": event_id}, headers=student_headers)
     assert res.status_code == 201, f"Registration failed: {res.text}"
     reg_data = res.json()

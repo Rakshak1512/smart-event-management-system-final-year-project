@@ -3,7 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db import firestore_service as db_service
-from app.dependencies import require_role, get_current_user
+from app.dependencies import require_role, get_current_approved_user
 from app.models.user import RoleEnum, User
 from app.schemas.feedback_schema import (
     FeedbackCreate,
@@ -43,7 +43,7 @@ def submit_feedback(
 @router.get("/event/{event_id}", response_model=EventFeedbackSummary)
 def get_event_feedback(
     event_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     """
     Get aggregated feedback stats, star distribution, and recent reviews for an event.

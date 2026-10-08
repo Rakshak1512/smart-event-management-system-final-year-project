@@ -32,18 +32,26 @@ export default function VerifyEmail() {
         return;
       }
 
-      await refreshFirebaseSession(role, true);
-      toast.success("Email verified successfully! Welcome to EventSphere.");
-      navigate(
-        role === "admin"
-          ? "/admin/dashboard"
-          : role === "faculty"
-          ? "/faculty/dashboard"
-          : role === "volunteer"
-          ? "/volunteer/dashboard"
-          : "/student/dashboard",
-        { replace: true }
-      );
+      const verifiedUser = await refreshFirebaseSession(role, true);
+      const userRole = (verifiedUser?.role || role).toLowerCase();
+      const status = (verifiedUser?.approval_status || "PENDING").toUpperCase();
+
+      if (userRole !== "admin" && status !== "APPROVED" && status !== "ACTIVE") {
+        toast.success("Email verified! Your account is awaiting institutional approval.");
+        navigate("/awaiting-approval", { replace: true });
+      } else {
+        toast.success("Email verified successfully! Welcome to EventSphere.");
+        navigate(
+          userRole === "admin"
+            ? "/admin/dashboard"
+            : userRole === "faculty"
+            ? "/faculty/dashboard"
+            : userRole === "volunteer"
+            ? "/volunteer/dashboard"
+            : "/student/dashboard",
+          { replace: true }
+        );
+      }
     } catch (err) {
       toast.error(err.response?.data?.detail || err.message || "Could not complete email verification.");
     } finally {

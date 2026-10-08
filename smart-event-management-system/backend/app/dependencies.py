@@ -37,57 +37,91 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     if user is None:
         raise credentials_exception
 
-    if not user.is_active:
-        approval_st = getattr(user, "approval_status", "ACTIVE") or "ACTIVE"
-        if approval_st not in ("PENDING_FACULTY_APPROVAL", "PENDING_ADMIN_APPROVAL"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Account is inactive or has been rejected.",
-            )
-
     return user
 
 
 def require_role(*roles: RoleEnum):
     def role_checker(current_user: User = Depends(get_current_user)) -> User:
-        # Enforce approval status at backend API layer
-        approval_st = getattr(current_user, "approval_status", "ACTIVE") or "ACTIVE"
-        if approval_st != "ACTIVE":
-            if approval_st == "PENDING_FACULTY_APPROVAL":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Your student account is awaiting faculty approval. Access to this feature is restricted.",
-                )
-            elif approval_st == "PENDING_ADMIN_APPROVAL":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Your faculty account is awaiting admin approval. Access to this feature is restricted.",
-                )
-            elif approval_st == "REJECTED":
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Your account has been reviewed and rejected by administrators.",
-                )
-            else:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Account approval is required before accessing this feature.",
-                )
-
-        role_vals = [r.value.lower() if hasattr(r, "value") else str(r).lower() for r in roles]
         user_role = (
             current_user.role.value.lower()
             if hasattr(current_user.role, "value")
             else str(current_user.role).lower()
         )
+        role_vals = [r.value.lower() if hasattr(r, "value") else str(r).lower() for r in roles]
         if user_role not in role_vals:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to perform this action",
             )
-        return current_user
+
+        # Admin accounts are always approved and bypass approval requirement
+        if user_role == "admin":
+            return current_user
+
+        # Enforce strict approval status for non-admin roles
+        approval_st = str(getattr(current_user, "approval_status", "APPROVED") or "APPROVED").upper().strip()
+        if approval_st in ("ACTIVE", "APPROVED"):
+            return current_user
+
+        if approval_st in ("PENDING", "PENDING_FACULTY_APPROVAL", "PENDING_ADMIN_APPROVAL"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ACCOUNT_PENDING_APPROVAL",
+            )
+        elif approval_st == "REJECTED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ACCOUNT_REJECTED",
+            )
+        elif approval_st in ("REMOVED", "DELETED"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ACCOUNT_REMOVED",
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ACCOUNT_PENDING_APPROVAL",
+            )
 
     return role_checker
+
+
+def get_current_approved_user(current_user: User = Depends(get_current_user)) -> User:
+    user_role = (
+        current_user.role.value.lower()
+        if hasattr(current_user.role, "value")
+        else str(current_user.role).lower()
+    )
+    # Admin accounts are always approved and bypass approval requirement
+    if user_role == "admin":
+        return current_user
+
+    # Enforce strict approval status for non-admin roles
+    approval_st = str(getattr(current_user, "approval_status", "APPROVED") or "APPROVED").upper().strip()
+    if approval_st in ("ACTIVE", "APPROVED"):
+        return current_user
+
+    if approval_st in ("PENDING", "PENDING_FACULTY_APPROVAL", "PENDING_ADMIN_APPROVAL"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ACCOUNT_PENDING_APPROVAL",
+        )
+    elif approval_st == "REJECTED":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ACCOUNT_REJECTED",
+        )
+    elif approval_st in ("REMOVED", "DELETED"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ACCOUNT_REMOVED",
+        )
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ACCOUNT_PENDING_APPROVAL",
+        )
 
 
 def get_client_ip(request: Request) -> str:

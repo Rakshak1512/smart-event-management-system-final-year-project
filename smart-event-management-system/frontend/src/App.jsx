@@ -22,6 +22,8 @@ const MyRegistrations = lazy(() => import("./pages/student/MyRegistrations.jsx")
 const StudentCertificates = lazy(() => import("./pages/student/Certificates.jsx"));
 
 const FacultyDashboard = lazy(() => import("./pages/faculty/Dashboard.jsx"));
+const FacultyStudentApprovals = lazy(() => import("./pages/faculty/StudentApprovals.jsx"));
+const FacultyVolunteerApprovals = lazy(() => import("./pages/faculty/VolunteerApprovals.jsx"));
 const ManageEvents = lazy(() => import("./pages/faculty/ManageEvents.jsx"));
 const FacultyRegistrations = lazy(() => import("./pages/faculty/Registrations.jsx"));
 const ManageRegistrations = lazy(() => import("./pages/faculty/ManageRegistrations.jsx"));
@@ -30,6 +32,7 @@ const FacultyResults = lazy(() => import("./pages/faculty/Results.jsx"));
 const AssignedTasks = lazy(() => import("./pages/faculty/AssignedTasks.jsx"));
 
 const AdminDashboard = lazy(() => import("./pages/admin/Dashboard.jsx"));
+const AdminFacultyApprovals = lazy(() => import("./pages/admin/FacultyApprovals.jsx"));
 const FacultyList = lazy(() => import("./pages/admin/FacultyList.jsx"));
 const AdminAssignments = lazy(() => import("./pages/admin/Assignments.jsx"));
 const AdminReports = lazy(() => import("./pages/admin/Reports.jsx"));
@@ -91,6 +94,9 @@ export default function App() {
           <Route path="/faculty" element={<DashboardLayout role="faculty" />}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<FacultyDashboard />} />
+            <Route path="student-approvals" element={<FacultyStudentApprovals />} />
+            <Route path="volunteer-approvals" element={<FacultyVolunteerApprovals />} />
+            <Route path="approvals" element={<FacultyStudentApprovals />} />
             <Route path="events" element={<ManageEvents />} />
             <Route path="events/:id" element={<EventDetail embedded={true} />} />
             <Route path="registrations" element={<FacultyRegistrations />} />
@@ -110,6 +116,8 @@ export default function App() {
           <Route path="/admin" element={<DashboardLayout role="admin" />}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<AdminDashboard />} />
+            <Route path="faculty-approvals" element={<AdminFacultyApprovals />} />
+            <Route path="approvals" element={<AdminFacultyApprovals />} />
             <Route path="faculty" element={<FacultyList />} />
             <Route path="assignments" element={<AdminAssignments />} />
             <Route path="events" element={<ManageEvents />} />

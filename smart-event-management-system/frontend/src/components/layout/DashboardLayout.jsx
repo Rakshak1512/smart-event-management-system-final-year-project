@@ -31,6 +31,8 @@ const studentItems = (base) => [
 
 const facultyItems = (base) => [
   { to: `${base}/dashboard`, label: "Home", icon: FiHome, end: true },
+  { to: `${base}/student-approvals`, label: "Student Approvals", icon: FiShield },
+  { to: `${base}/volunteer-approvals`, label: "Volunteer Approvals", icon: FiAward },
   { to: `${base}/events`, label: "Manage Events", icon: FiPlusSquare },
   { to: `${base}/registrations`, label: "Registrations", icon: FiClipboard },
   { to: `${base}/registration-reports`, label: "Registration Reports", icon: FiUsers },
@@ -44,7 +46,8 @@ const facultyItems = (base) => [
 
 const adminItems = (base) => [
   { to: `${base}/dashboard`, label: "Overview", icon: FiHome, end: true },
-  { to: `${base}/faculty`, label: "Faculty", icon: FiUsers },
+  { to: `${base}/faculty-approvals`, label: "Faculty Approvals", icon: FiShield },
+  { to: `${base}/faculty`, label: "Faculty Directory", icon: FiUsers },
   { to: `${base}/assignments`, label: "Work Assignments", icon: FiCheckSquare },
   { to: `${base}/events`, label: "Events", icon: FiCalendar },
   { to: `${base}/reports`, label: "Reports & Exports", icon: FiFileText },

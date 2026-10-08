@@ -6,6 +6,7 @@ Configured via environment variables:
 - RESEND_FROM_EMAIL
 - SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_NAME, SMTP_FROM_EMAIL, SMTP_USE_TLS
 """
+from datetime import datetime
 import logging
 import smtplib
 import requests
@@ -18,66 +19,9 @@ import requests
 
 from app.core.config import settings
 
+import time
+
 logger = logging.getLogger("app.email")
-
-
-def _send_via_resend(
-    to_email: str,
-    subject: str,
-    html_body: str,
-    text_body: Optional[str] = None,
-) -> Tuple[bool, str]:
-    """Send email through Resend's HTTPS API (works on Render Free)."""
-    api_key = (settings.RESEND_API_KEY or "").strip()
-    from_email = (settings.RESEND_FROM_EMAIL or "").strip()
-
-    if not api_key or not from_email:
-        logger.error("Resend is selected but RESEND_API_KEY/RESEND_FROM_EMAIL is missing.")
-        return False, "Resend email service is not configured."
-
-    try:
-        payload = {
-            "from": from_email,
-            "to": [to_email],
-            "subject": subject,
-            "html": html_body,
-        }
-        if text_body:
-            payload["text"] = text_body
-
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=15,
-        )
-
-        if 200 <= response.status_code < 300:
-            try:
-                message_id = response.json().get("id")
-            except Exception:
-                message_id = None
-            logger.info(
-                "Resend email accepted for %s (message_id=%s)",
-                _mask_email(to_email),
-                message_id or "unknown",
-            )
-            return True, "Email delivered successfully"
-
-        logger.error(
-            "Resend delivery failed for %s: HTTP %s %s",
-            _mask_email(to_email),
-            response.status_code,
-            response.text[:300],
-        )
-        return False, "Unable to send verification email. Please check the email service configuration."
-
-    except Exception as e:
-        logger.error("Resend network exception for %s: %s", _mask_email(to_email), str(e))
-        return False, "Unable to send verification email. Please check the email service configuration."
 
 
 def _mask_email(email: str) -> str:
@@ -95,17 +39,15 @@ def _mask_email(email: str) -> str:
 def _send_via_resend(
     to_addr: str, subject: str, html_body: str, text_body: Optional[str] = None
 ) -> Tuple[bool, str]:
-    """Send an email using Resend REST API."""
+    """Send an email using Resend REST API with retry handling and secure error reporting."""
     api_key = (settings.RESEND_API_KEY or "").strip()
     if not api_key:
         return False, "RESEND_API_KEY not configured"
 
     masked_to = _mask_email(to_addr)
     from_name = (settings.SMTP_FROM_NAME or settings.APP_NAME or "EventSphere").strip()
-    from_email = (settings.RESEND_FROM_EMAIL or settings.SMTP_FROM_EMAIL or "onboarding@resend.dev").strip()
+    from_email = (settings.RESEND_FROM_EMAIL or "onboarding@resend.dev").strip()
     sender = f"{from_name} <{from_email}>"
-
-    logger.info("[EMAIL] [RESEND] Initiating dispatch to %s via Resend (Sender: %s)", masked_to, from_email)
 
     payload = {
         "from": sender,
@@ -116,25 +58,42 @@ def _send_via_resend(
     if text_body:
         payload["text"] = text_body
 
-    try:
-        response = requests.post(
-            "https://api.resend.com/emails",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=12,
-        )
-        if response.status_code in (200, 201):
-            logger.info("[EMAIL] [RESEND] Successfully delivered email to %s", masked_to)
-            return True, "Email delivered successfully via Resend"
-        err_msg = response.text[:200]
-        logger.error("[EMAIL] [RESEND] API error (Status %s) for %s: %s", response.status_code, masked_to, err_msg)
-        return False, f"Resend API error: {err_msg}"
-    except Exception as e:
-        logger.error("[EMAIL] [RESEND] Connection failed for %s: %s", masked_to, str(e))
-        return False, f"Resend network error: {str(e)}"
+    max_retries = 2
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=12,
+            )
+            if response.status_code in (200, 201):
+                msg_id = ""
+                try:
+                    msg_id = response.json().get("id", "")
+                except Exception:
+                    pass
+                logger.info("[EMAIL] [RESEND] Successfully delivered email to %s (id: %s)", masked_to, msg_id)
+                return True, "Email delivered successfully via Resend"
+
+            err_msg = response.text[:200]
+            logger.error("[EMAIL] [RESEND] API error (HTTP %s) for %s (attempt %d): %s", response.status_code, masked_to, attempt + 1, err_msg)
+
+            if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries - 1:
+                time.sleep(0.5)
+                continue
+            return False, "Unable to send verification email. Please try again later."
+        except Exception as e:
+            logger.error("[EMAIL] [RESEND] Connection failed for %s (attempt %d): %s", masked_to, attempt + 1, str(e))
+            if attempt < max_retries - 1:
+                time.sleep(0.5)
+                continue
+            return False, "Unable to send verification email. Please try again later."
+
+    return False, "Unable to send verification email. Please try again later."
 
 
 def _send_via_smtp(
@@ -194,8 +153,9 @@ def send_email_detailed(
 ) -> Tuple[bool, str]:
     """
     Primary email dispatch function.
-    Automatically prioritizes Resend (if configured) then SMTP, with safe logging.
-    In development/debug environments, gracefully falls back without blocking auth flows.
+    Automatically prioritizes Resend if configured.
+    When Resend is configured, SMTP/Gmail is NOT used for authentication or account emails.
+    In development/debug environments, gracefully falls back without blocking user registration.
     """
     to_addr = (to_email or "").strip()
     if not to_addr:
@@ -205,22 +165,31 @@ def send_email_detailed(
     has_resend = bool((settings.RESEND_API_KEY or "").strip())
     has_smtp = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
 
-    # 1. Try Resend if configured
+    # 1. Primary path: Resend API (strictly preferred when configured)
     if has_resend:
         ok, detail = _send_via_resend(to_addr, subject, html_body, text_body)
         if ok:
             return True, detail
-        logger.warning("[EMAIL] Resend delivery failed for %s, falling back to SMTP if available: %s", masked_to, detail)
+        logger.error("[EMAIL] [RESEND] Delivery failed for %s: %s", masked_to, detail)
+        # Development fallback only
+        if settings.APP_ENV != "production" or settings.DEBUG:
+            logger.info(
+                "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated (Subject: %s). Running in %s mode.",
+                masked_to,
+                subject,
+                settings.APP_ENV,
+            )
+            return True, "Email delivery recorded (development mode)"
+        return False, "Unable to send verification email. Please try again later."
 
-    # 2. Try SMTP if configured
+    # 2. Secondary path: SMTP (only when Resend is NOT configured)
     if has_smtp:
         ok, detail = _send_via_smtp(to_addr, subject, html_body, text_body)
         if ok:
             return True, detail
-        logger.warning("[EMAIL] SMTP delivery failed for %s: %s", masked_to, detail)
+        logger.warning("[EMAIL] [SMTP] Delivery failed for %s: %s", masked_to, detail)
 
     # 3. Development / Localhost Fallback
-    # In development mode, allow user flows to proceed so engineers/testers are never locked out
     if settings.APP_ENV != "production" or settings.DEBUG:
         logger.info(
             "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated (Subject: %s). Running in %s mode.",
@@ -230,7 +199,7 @@ def send_email_detailed(
         )
         return True, "Email delivery recorded (development mode)"
 
-    err_msg = "Email service is temporarily unavailable. Please contact support."
+    err_msg = "Unable to send verification email. Please try again later."
     logger.error("[EMAIL] [DISPATCH_FAILED] No active email delivery succeeded for %s", masked_to)
     return False, err_msg
 
@@ -683,8 +652,8 @@ def send_faculty_work_assigned_email(
 def send_account_pending_approval_email(to_email: str, name: str, role: str) -> bool:
     """Send alert that account is verified and waiting for institutional approval."""
     role_str = str(role).capitalize()
-    approver = "Faculty Coordinator" if role == "student" else "System Administrator"
-    subject = f"EventSphere Account Created — Pending {approver} Approval"
+    approver = "Faculty" if role.lower() == "student" else "Admin"
+    subject = f"EventSphere Account Created — Waiting for {approver} Approval"
     html = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>{subject}</title></head>
@@ -705,102 +674,254 @@ def send_account_pending_approval_email(to_email: str, name: str, role: str) -> 
     return send_email(to_email, subject, html, f"Hello {name}, your EventSphere account is awaiting {approver} approval.")
 
 
-def send_student_approved_email(to_email: str, name: str) -> bool:
-    """Send student account approval notification email."""
-    subject = "🎉 EventSphere Account Approved! Welcome to Student Portal"
-    portal_url = f"{settings.FRONTEND_URL}/student/dashboard"
+def send_student_approved_email(to_email: str, name: str, uucms_id: Optional[str] = None) -> bool:
+    """Send student account approval notification email via Resend."""
+    subject = "Your EventSphere Student Account Has Been Approved"
+    login_url = f"{settings.FRONTEND_URL}/login"
+    dashboard_url = f"{settings.FRONTEND_URL}/student/dashboard"
+    uucms_display = uucms_id or "Recorded with Faculty"
+
     html = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{subject}</title></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
-  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
-    <h2 style="color: #10b981; margin-top: 0;">🎉 Account Approved!</h2>
-    <p style="color: #cbd5e1; font-size: 15px;">Hello <strong>{name}</strong>,</p>
-    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
-      Great news! Your EventSphere student account has been approved by the faculty coordinators. Your student dashboard, event registration, and digital QR passes are now fully active.
-    </p>
-    <div style="margin: 24px 0;">
-      <a href="{portal_url}" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 600; display: inline-block;">
-        Open Student Dashboard
-      </a>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #d1fae5;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
     </div>
-    <p style="color: #64748b; font-size: 12px; margin: 0;">Welcome to EventSphere Smart Event Management.</p>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; border-radius: 20px; color: #34d399; font-weight: 700; font-size: 13px;">
+          ✓ STATUS: APPROVED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        Your Student Account Has Been Approved!
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Hello <strong style="color: #f1f5f9;">{name}</strong>,<br>
+        Great news! Your EventSphere student registration has been successfully verified and approved by the faculty coordinators.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Student Name:</td>
+            <td style="color: #f1f5f9; font-weight: 600; text-align: right; padding: 4px 0;">{name}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">UUCMS ID:</td>
+            <td style="color: #38bdf8; font-family: monospace; font-weight: 600; text-align: right; padding: 4px 0;">{uucms_display}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Approval Status:</td>
+            <td style="color: #34d399; font-weight: 700; text-align: right; padding: 4px 0;">APPROVED</td>
+          </tr>
+        </table>
+      </div>
+      <div style="background: rgba(99, 102, 241, 0.08); border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
+        <p style="margin: 0; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Login Instruction:</strong> Sign in with your registered email and password to access the student dashboard, register for campus events, and manage tickets.
+        </p>
+      </div>
+      <div style="text-align: center; margin: 24px 0 10px;">
+        <a href="{dashboard_url}" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 10px; font-weight: 700; font-size: 14.5px; display: inline-block;">
+          Open Student Dashboard &rarr;
+        </a>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • Institutional Academic Administration
+      </p>
+    </div>
   </div>
 </body>
 </html>"""
-    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere student account has been approved! Visit {portal_url}")
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere student account ({uucms_display}) has been APPROVED. Log in at {login_url}")
 
 
 def send_student_rejected_email(to_email: str, name: str, reason: Optional[str] = None) -> bool:
-    """Send student account rejection notification email."""
-    subject = "EventSphere Account Registration Update"
-    reason_txt = reason or "Verification details could not be validated with institutional records."
+    """Send student account rejection notification email via Resend."""
+    subject = "Update Regarding Your EventSphere Student Account"
+    reason_txt = reason or "Verification details could not be validated against official institutional records."
+
     html = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{subject}</title></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
-  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
-    <h2 style="color: #ef4444; margin-top: 0;">Registration Update</h2>
-    <p style="color: #cbd5e1; font-size: 15px;">Hello <strong>{name}</strong>,</p>
-    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
-      Your student account application for EventSphere was reviewed and could not be approved at this time.
-    </p>
-    <div style="background: #0f172a; padding: 14px; border-radius: 10px; margin: 18px 0; border: 1px solid #334155; text-align: left;">
-      <p style="margin: 0; font-size: 13px; color: #ef4444;"><strong>Reason:</strong> {reason_txt}</p>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #fee2e2;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
     </div>
-    <p style="color: #64748b; font-size: 12px; margin: 0;">Please contact your department faculty coordinator if you believe this is in error.</p>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 20px; color: #f87171; font-weight: 700; font-size: 13px;">
+          STATUS: REJECTED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        Update Regarding Your Student Account
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Hello <strong style="color: #f1f5f9;">{name}</strong>,<br>
+        Your application for an EventSphere student account was reviewed by faculty coordinators and could not be approved at this time.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 600;">
+          REASON FOR REJECTION:
+        </p>
+        <p style="margin: 0; font-size: 14px; color: #f87171; font-weight: 500; line-height: 1.5;">
+          {reason_txt}
+        </p>
+      </div>
+      <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid #334155; padding: 14px 16px; border-radius: 8px;">
+        <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Contact Information:</strong> If you believe this decision is in error, please contact your department faculty coordinator or head of department with your valid institutional credentials.
+        </p>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • Institutional Academic Administration
+      </p>
+    </div>
   </div>
 </body>
 </html>"""
-    return send_email(to_email, subject, html, f"Hello {name}, your registration could not be approved: {reason_txt}")
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere student registration could not be approved. Reason: {reason_txt}")
 
 
-def send_faculty_approved_email(to_email: str, name: str) -> bool:
-    """Send faculty account approval notification email."""
-    subject = "🎉 EventSphere Faculty Portal Approved"
-    portal_url = f"{settings.FRONTEND_URL}/faculty/dashboard"
+def send_faculty_approved_email(to_email: str, name: str, faculty_id: Optional[str] = None) -> bool:
+    """Send faculty account approval notification email via Resend."""
+    subject = "Your EventSphere Faculty Account Has Been Approved"
+    login_url = f"{settings.FRONTEND_URL}/login"
+    dashboard_url = f"{settings.FRONTEND_URL}/faculty/dashboard"
+    fac_id_display = faculty_id or "Recorded with Admin"
+
     html = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{subject}</title></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
-  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
-    <h2 style="color: #6366f1; margin-top: 0;">🎉 Faculty Account Approved</h2>
-    <p style="color: #cbd5e1; font-size: 15px;">Dear <strong>Prof. {name}</strong>,</p>
-    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
-      Your EventSphere Faculty account has been verified and approved by the System Administrator. You can now create campus events, manage student registrations, and view analytics.
-    </p>
-    <div style="margin: 24px 0;">
-      <a href="{portal_url}" style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 600; display: inline-block;">
-        Access Faculty Dashboard
-      </a>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #c7d2fe;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
+    </div>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(99, 102, 241, 0.15); border: 1px solid #6366f1; border-radius: 20px; color: #a5b4fc; font-weight: 700; font-size: 13px;">
+          ✓ STATUS: APPROVED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        Your Faculty Account Has Been Approved!
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Dear <strong style="color: #f1f5f9;">Prof. {name}</strong>,<br>
+        Your EventSphere Faculty Coordinator account has been verified and approved by the System Administrator.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Faculty Name:</td>
+            <td style="color: #f1f5f9; font-weight: 600; text-align: right; padding: 4px 0;">{name}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Faculty ID:</td>
+            <td style="color: #38bdf8; font-family: monospace; font-weight: 600; text-align: right; padding: 4px 0;">{fac_id_display}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Approval Status:</td>
+            <td style="color: #34d399; font-weight: 700; text-align: right; padding: 4px 0;">APPROVED</td>
+          </tr>
+        </table>
+      </div>
+      <div style="background: rgba(99, 102, 241, 0.08); border-left: 3px solid #6366f1; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
+        <p style="margin: 0; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Login Instruction:</strong> Log in using your email and password to access the Faculty Dashboard, review pending student registrations, and manage campus events.
+        </p>
+      </div>
+      <div style="text-align: center; margin: 24px 0 10px;">
+        <a href="{dashboard_url}" style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 10px; font-weight: 700; font-size: 14.5px; display: inline-block;">
+          Access Faculty Dashboard &rarr;
+        </a>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • System Administration Directorate
+      </p>
     </div>
   </div>
 </body>
 </html>"""
-    return send_email(to_email, subject, html, f"Dear Prof. {name}, your faculty account has been approved! Visit {portal_url}")
+    return send_email(to_email, subject, html, f"Dear Prof. {name}, your EventSphere faculty account ({fac_id_display}) has been approved! Visit {login_url}")
 
 
 def send_faculty_rejected_email(to_email: str, name: str, reason: Optional[str] = None) -> bool:
-    """Send faculty account rejection notification email."""
-    subject = "EventSphere Faculty Account Update"
-    reason_txt = reason or "Faculty credentials could not be verified by system administrators."
+    """Send faculty account rejection notification email via Resend."""
+    subject = "Update Regarding Your EventSphere Faculty Account"
+    reason_txt = reason or "Faculty institutional credentials could not be verified by the System Administrator."
+
     html = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>{subject}</title></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
-  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
-    <h2 style="color: #ef4444; margin-top: 0;">Faculty Registration Update</h2>
-    <p style="color: #cbd5e1; font-size: 15px;">Dear <strong>Prof. {name}</strong>,</p>
-    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
-      Your application for a Faculty coordinator account was reviewed and could not be approved at this time.
-    </p>
-    <div style="background: #0f172a; padding: 14px; border-radius: 10px; margin: 18px 0; border: 1px solid #334155; text-align: left;">
-      <p style="margin: 0; font-size: 13px; color: #ef4444;"><strong>Reason:</strong> {reason_txt}</p>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #fee2e2;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
+    </div>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 20px; color: #f87171; font-weight: 700; font-size: 13px;">
+          STATUS: REJECTED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        Update Regarding Your Faculty Account
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Dear <strong style="color: #f1f5f9;">Prof. {name}</strong>,<br>
+        Your application for an EventSphere Faculty Coordinator account was reviewed by the System Administrator and could not be approved at this time.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 600;">
+          REASON FOR REJECTION:
+        </p>
+        <p style="margin: 0; font-size: 14px; color: #f87171; font-weight: 500; line-height: 1.5;">
+          {reason_txt}
+        </p>
+      </div>
+      <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid #334155; padding: 14px 16px; border-radius: 8px;">
+        <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Contact Information:</strong> If you believe this decision is in error, please contact the System Administrator / Principal to verify your institutional appointment.
+        </p>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • System Administration Directorate
+      </p>
     </div>
   </div>
 </body>
 </html>"""
-    return send_email(to_email, subject, html, f"Dear Prof. {name}, your registration could not be approved: {reason_txt}")
+    return send_email(to_email, subject, html, f"Dear Prof. {name}, your EventSphere faculty registration was not approved. Reason: {reason_txt}")
 
 
 def send_admin_new_faculty_alert_email(admin_email: str, faculty_name: str, faculty_email: str, department: Optional[str] = None) -> bool:
@@ -829,6 +950,131 @@ def send_admin_new_faculty_alert_email(admin_email: str, faculty_name: str, facu
 </body>
 </html>"""
     return send_email(admin_email, subject, html, f"New Faculty awaiting approval: {faculty_name} ({faculty_email})")
+
+
+def send_volunteer_approved_email(to_email: str, name: str, volunteer_id: Optional[str] = None) -> bool:
+    """Send volunteer account approval notification email via Resend."""
+    subject = "EventSphere Volunteer Account Approved"
+    login_url = f"{settings.FRONTEND_URL}/login"
+    dashboard_url = f"{settings.FRONTEND_URL}/volunteer/dashboard"
+    vol_id_display = volunteer_id or "Recorded with Faculty"
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #99f6e4;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
+    </div>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(13, 148, 136, 0.15); border: 1px solid #0d9488; border-radius: 20px; color: #5eead4; font-weight: 700; font-size: 13px;">
+          ✓ STATUS: APPROVED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        Your Volunteer Account Has Been Approved!
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Hello <strong style="color: #f1f5f9;">{name}</strong>,<br>
+        Great news! Your EventSphere volunteer account has been verified and approved by the faculty coordinators.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13.5px;">
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Volunteer Name:</td>
+            <td style="color: #f1f5f9; font-weight: 600; text-align: right; padding: 4px 0;">{name}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Volunteer ID:</td>
+            <td style="color: #38bdf8; font-family: monospace; font-weight: 600; text-align: right; padding: 4px 0;">{vol_id_display}</td>
+          </tr>
+          <tr>
+            <td style="color: #64748b; padding: 4px 0;">Approval Status:</td>
+            <td style="color: #34d399; font-weight: 700; text-align: right; padding: 4px 0;">APPROVED</td>
+          </tr>
+        </table>
+      </div>
+      <div style="background: rgba(13, 148, 136, 0.08); border-left: 3px solid #0d9488; padding: 12px 16px; border-radius: 4px; margin-bottom: 24px;">
+        <p style="margin: 0; font-size: 13.5px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Login Instruction:</strong> Sign in with your registered email and password to access the Volunteer Dashboard, scan QR tickets, and assist in event coordination.
+        </p>
+      </div>
+      <div style="text-align: center; margin: 24px 0 10px;">
+        <a href="{dashboard_url}" style="background: linear-gradient(135deg, #0d9488 0%, #0f766e 100%); color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 10px; font-weight: 700; font-size: 14.5px; display: inline-block;">
+          Open Volunteer Dashboard &rarr;
+        </a>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • Student & Volunteer Activities Board
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere volunteer account ({vol_id_display}) has been APPROVED. Log in at {login_url}")
+
+
+def send_volunteer_rejected_email(to_email: str, name: str, reason: Optional[str] = None) -> bool:
+    """Send volunteer account rejection notification email via Resend."""
+    subject = "EventSphere Volunteer Account Update"
+    reason_txt = reason or "Volunteer credentials could not be validated by institutional coordinators."
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{subject}</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; overflow: hidden; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
+    <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); padding: 30px 24px; text-align: center;">
+      <h1 style="margin: 0; font-size: 26px; font-weight: 800; color: #ffffff;">Event<span style="color: #fee2e2;">Sphere</span></h1>
+      <p style="margin: 6px 0 0; color: rgba(255,255,255,0.9); font-size: 14px;">Smart Event Management System</p>
+    </div>
+    <div style="padding: 30px 26px;">
+      <div style="text-align: center; margin-bottom: 18px;">
+        <span style="display: inline-block; padding: 6px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 20px; color: #f87171; font-weight: 700; font-size: 13px;">
+          STATUS: REJECTED
+        </span>
+      </div>
+      <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc; text-align: center;">
+        EventSphere Volunteer Account Update
+      </h2>
+      <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
+        Hello <strong style="color: #f1f5f9;">{name}</strong>,<br>
+        Your application for an EventSphere volunteer account was reviewed by faculty coordinators and could not be approved at this time.
+      </p>
+      <div style="background: #0f172a; border-radius: 12px; padding: 18px 20px; border: 1px solid #334155; margin-bottom: 22px;">
+        <p style="margin: 0 0 8px; font-size: 13px; color: #64748b; font-weight: 600;">
+          REASON FOR REJECTION:
+        </p>
+        <p style="margin: 0; font-size: 14px; color: #f87171; font-weight: 500; line-height: 1.5;">
+          {reason_txt}
+        </p>
+      </div>
+      <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid #334155; padding: 14px 16px; border-radius: 8px;">
+        <p style="margin: 0; font-size: 13px; color: #cbd5e1; line-height: 1.5;">
+          <strong>Contact Information:</strong> If you believe this decision is in error, please consult your department faculty coordinator.
+        </p>
+      </div>
+    </div>
+    <div style="background: #0f172a; padding: 16px 28px; text-align: center; border-top: 1px solid #334155;">
+      <p style="margin: 0; font-size: 12px; color: #64748b;">
+        © {datetime.now().year} EventSphere • Student & Volunteer Activities Board
+      </p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere volunteer application was not approved. Reason: {reason_txt}")
 
 
 

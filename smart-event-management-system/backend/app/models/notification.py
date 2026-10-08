@@ -23,8 +23,8 @@ class Notification:
         is_read: bool = False,
         created_at: Optional[datetime] = None,
     ):
-        self.id = int(id)
-        self.user_id = int(user_id)
+        self.id = int(id) if str(id).isdigit() else id
+        self.user_id = int(user_id) if str(user_id).isdigit() else user_id
         self.title = title
         self.message = message
         self.type = NotificationType(type) if isinstance(type, str) else type

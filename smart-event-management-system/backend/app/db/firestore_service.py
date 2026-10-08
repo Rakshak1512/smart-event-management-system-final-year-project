@@ -129,13 +129,30 @@ def create_user(
     phone: Optional[str] = None,
     department: Optional[str] = None,
     semester: Optional[str] = None,
+    course: Optional[str] = None,
+    designation: Optional[str] = None,
     profile_picture: Optional[str] = None,
     is_email_verified: bool = False,
-    is_active: bool = True,
-    approval_status: str = "ACTIVE",
+    is_active: Optional[bool] = None,
+    approval_status: Optional[str] = None,
 ) -> User:
     db = get_firestore_db()
     user_id = get_next_id("users")
+
+    role_str = (role.value if hasattr(role, "value") else str(role)).lower()
+    if approval_status is None:
+        if role_str == "admin":
+            approval_status = "APPROVED"
+            if is_active is None:
+                is_active = True
+        else:
+            approval_status = "PENDING"
+            if is_active is None:
+                is_active = False
+    else:
+        if is_active is None:
+            is_active = approval_status in ("APPROVED", "ACTIVE")
+
     user = User(
         id=user_id,
         name=name,
@@ -147,9 +164,11 @@ def create_user(
         phone=phone,
         department=department,
         semester=semester,
+        course=course,
+        designation=designation,
         profile_picture=profile_picture,
         is_email_verified=is_email_verified,
-        is_active=is_active,
+        is_active=bool(is_active),
         approval_status=approval_status,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
@@ -166,9 +185,31 @@ def get_pending_students() -> List[User]:
     pending = []
     for doc in docs:
         u = User.from_dict(doc.to_dict())
-        if u and u.approval_status == "PENDING_FACULTY_APPROVAL":
+        if u and not getattr(u, "is_deleted", False) and u.approval_status == "PENDING":
             pending.append(u)
     return sorted(pending, key=lambda x: x.created_at or datetime.min, reverse=True)
+
+
+def get_all_students_approvals() -> dict:
+    """Retrieve all students categorized with counts for the faculty approvals dashboard."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "student").stream()
+    students = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and not getattr(u, "is_deleted", False) and u.approval_status != "REMOVED":
+            students.append(u)
+    students = sorted(students, key=lambda x: x.created_at or datetime.min, reverse=True)
+    pending_count = sum(1 for s in students if s.approval_status == "PENDING")
+    approved_count = sum(1 for s in students if s.approval_status == "APPROVED")
+    rejected_count = sum(1 for s in students if s.approval_status == "REJECTED")
+    return {
+        "students": students,
+        "pending_count": pending_count,
+        "approved_count": approved_count,
+        "rejected_count": rejected_count,
+        "total_count": len(students),
+    }
 
 
 def get_pending_faculty() -> List[User]:
@@ -178,30 +219,129 @@ def get_pending_faculty() -> List[User]:
     pending = []
     for doc in docs:
         u = User.from_dict(doc.to_dict())
-        if u and u.approval_status == "PENDING_ADMIN_APPROVAL":
+        if u and not getattr(u, "is_deleted", False) and u.approval_status == "PENDING":
             pending.append(u)
     return sorted(pending, key=lambda x: x.created_at or datetime.min, reverse=True)
 
 
-def approve_user(user_id: int) -> Optional[User]:
-    """Approve a student or faculty account, setting status to ACTIVE."""
+def get_all_faculty_approvals() -> dict:
+    """Retrieve all faculty categorized with counts for the admin approvals dashboard."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "faculty").stream()
+    faculty_list = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and not getattr(u, "is_deleted", False) and u.approval_status != "REMOVED":
+            faculty_list.append(u)
+    faculty_list = sorted(faculty_list, key=lambda x: x.created_at or datetime.min, reverse=True)
+    pending_count = sum(1 for f in faculty_list if f.approval_status == "PENDING")
+    approved_count = sum(1 for f in faculty_list if f.approval_status == "APPROVED")
+    rejected_count = sum(1 for f in faculty_list if f.approval_status == "REJECTED")
+    return {
+        "faculty": faculty_list,
+        "pending_count": pending_count,
+        "approved_count": approved_count,
+        "rejected_count": rejected_count,
+        "total_count": len(faculty_list),
+    }
+
+
+def get_pending_volunteers() -> List[User]:
+    """Retrieve all volunteer accounts awaiting faculty approval."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "volunteer").stream()
+    pending = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and not getattr(u, "is_deleted", False) and u.approval_status == "PENDING":
+            pending.append(u)
+    return sorted(pending, key=lambda x: x.created_at or datetime.min, reverse=True)
+
+
+def get_all_volunteer_approvals() -> dict:
+    """Retrieve all volunteers categorized with counts for the faculty volunteer approvals dashboard."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "volunteer").stream()
+    volunteer_list = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and not getattr(u, "is_deleted", False) and u.approval_status != "REMOVED":
+            volunteer_list.append(u)
+    volunteer_list = sorted(volunteer_list, key=lambda x: x.created_at or datetime.min, reverse=True)
+    pending_count = sum(1 for v in volunteer_list if v.approval_status == "PENDING")
+    approved_count = sum(1 for v in volunteer_list if v.approval_status == "APPROVED")
+    rejected_count = sum(1 for v in volunteer_list if v.approval_status == "REJECTED")
+    return {
+        "volunteers": volunteer_list,
+        "pending_count": pending_count,
+        "approved_count": approved_count,
+        "rejected_count": rejected_count,
+        "total_count": len(volunteer_list),
+    }
+
+
+def approve_user(user_id: int, approver_id: Optional[int] = None) -> Optional[User]:
+    """Approve a user account, setting status to APPROVED."""
     res = update_user(user_id, {
-        "approval_status": "ACTIVE",
+        "approval_status": "APPROVED",
         "is_active": True,
+        "approved_by": approver_id,
+        "approved_at": datetime.now(timezone.utc),
     })
     invalidate_user_caches(user_id)
     return res
 
 
-def reject_user(user_id: int, reason: Optional[str] = None) -> Optional[User]:
-    """Reject a student or faculty account."""
+def reject_user(user_id: int, reason: Optional[str] = None, rejected_by: Optional[int] = None) -> Optional[User]:
+    """Reject a user account, setting status to REJECTED."""
     res = update_user(user_id, {
         "approval_status": "REJECTED",
         "is_active": False,
         "rejection_reason": reason or "Account application was not approved by institutional coordinators.",
+        "rejected_by": rejected_by,
+        "rejected_at": datetime.now(timezone.utc),
     })
     invalidate_user_caches(user_id)
     return res
+
+
+def remove_user_account(user_id: int) -> bool:
+    """Safely remove a user account and mark as REMOVED without breaking relationships."""
+    if user_id is None:
+        return False
+    db = get_firestore_db()
+    doc_ref = db.collection("users").document(str(user_id))
+    doc = doc_ref.get()
+    if not doc.exists:
+        try:
+            uid_val = int(user_id) if str(user_id).isdigit() else user_id
+            docs = list(db.collection("users").where("id", "==", uid_val).limit(1).stream())
+            if docs:
+                doc_ref = docs[0].reference
+            else:
+                return False
+        except Exception:
+            return False
+    now_utc = datetime.now(timezone.utc)
+    doc_ref.update({
+        "approval_status": "REMOVED",
+        "is_active": False,
+        "is_deleted": True,
+        "deleted_at": now_utc,
+        "updated_at": now_utc,
+    })
+    invalidate_user_caches(user_id)
+    return True
+
+
+def deactivate_user(user_id: int) -> bool:
+    """Deactivate user account safely."""
+    return remove_user_account(user_id)
+
+
+def delete_user(user_id: int) -> bool:
+    """Safe deletion alias."""
+    return remove_user_account(user_id)
 
 
 

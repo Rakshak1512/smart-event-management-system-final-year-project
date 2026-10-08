@@ -12,12 +12,16 @@ export default function ProtectedRoute({ allowedRoles }) {
     return <Navigate to="/login" replace />;
   }
 
-  const approvalStatus = (user.approval_status || "ACTIVE").toUpperCase();
-  if (approvalStatus !== "ACTIVE") {
-    return <Navigate to="/awaiting-approval" replace />;
+  const userRole = (user.role || "").toLowerCase();
+  const approvalStatus = (user.approval_status || "APPROVED").toUpperCase();
+
+  // Admin accounts are always approved and bypass institutional approval
+  if (userRole !== "admin") {
+    if (approvalStatus !== "APPROVED" && approvalStatus !== "ACTIVE") {
+      return <Navigate to="/awaiting-approval" replace />;
+    }
   }
 
-  const userRole = (user.role || "").toLowerCase();
   const normalizedAllowed = allowedRoles?.map((r) => r.toLowerCase());
 
   if (normalizedAllowed && !normalizedAllowed.includes(userRole)) {

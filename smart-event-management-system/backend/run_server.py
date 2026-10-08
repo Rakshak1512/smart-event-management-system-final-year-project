@@ -97,15 +97,15 @@ def update_frontend_api_port(new_port: int):
         if os.path.exists(frontend_env):
             with open(frontend_env, "r", encoding="utf-8") as f:
                 content = f.read()
-            new_line = f"VITE_API_URL=http://localhost:{new_port}\n"
+            new_line = f"VITE_API_URL=http://127.0.0.1:{new_port}\n"
             if "VITE_API_URL=" in content:
                 import re
-                content = re.sub(r"VITE_API_URL=.*", f"VITE_API_URL=http://localhost:{new_port}", content)
+                content = re.sub(r"VITE_API_URL=.*", f"VITE_API_URL=http://127.0.0.1:{new_port}", content)
             else:
                 content += new_line
             with open(frontend_env, "w", encoding="utf-8") as f:
                 f.write(content)
-            print(f"[SYNC] Updated frontend/.env -> VITE_API_URL=http://localhost:{new_port}")
+            print(f"[SYNC] Updated frontend/.env -> VITE_API_URL=http://127.0.0.1:{new_port}")
     except Exception as e:
         print(f"[WARNING] Could not sync frontend .env: {e}")
 
@@ -148,15 +148,11 @@ if __name__ == "__main__":
     print(f" Swagger Docs: http://{host}:{active_port}/docs")
     print("=" * 60)
 
-    config = uvicorn.Config(
+    uvicorn.run(
         "app.main:app",
         host=host,
         port=active_port,
         reload=reload_enabled,
         log_level=os.environ.get("LOG_LEVEL", "info").lower(),
-        loop="asyncio",
         access_log=True,
     )
-    server = uvicorn.Server(config)
-    server.install_signal_handlers = lambda: None
-    server.run()

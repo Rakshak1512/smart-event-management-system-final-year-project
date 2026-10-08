@@ -1,12 +1,23 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { FiCalendar, FiUsers, FiAward, FiPlusSquare, FiArrowRight, FiCheckCircle, FiX, FiAlertCircle } from "react-icons/fi";
+import {
+  FiCalendar,
+  FiUsers,
+  FiAward,
+  FiPlusSquare,
+  FiArrowRight,
+  FiCheckCircle,
+  FiX,
+  FiAlertCircle,
+  FiClock,
+  FiXCircle,
+} from "react-icons/fi";
 import toast from "react-hot-toast";
 import StatCard from "../../components/dashboard/StatCard.jsx";
 import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
-import { analyticsService, eventService, facultyApprovalService } from "../../api/services.js";
+import { analyticsService, eventService, facultyApprovalService, volunteerApprovalService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate } from "../../utils/format.js";
@@ -17,6 +28,18 @@ export default function FacultyDashboard() {
   const [analytics, setAnalytics] = useState(null);
   const [recentEvents, setRecentEvents] = useState([]);
   const [pendingStudents, setPendingStudents] = useState([]);
+  const [studentStats, setStudentStats] = useState({
+    total_count: 0,
+    pending_count: 0,
+    approved_count: 0,
+    rejected_count: 0,
+  });
+  const [volunteerStats, setVolunteerStats] = useState({
+    total_count: 0,
+    pending_count: 0,
+    approved_count: 0,
+    rejected_count: 0,
+  });
   const [approvingId, setApprovingId] = useState(null);
   const [rejectingId, setRejectingId] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -25,11 +48,31 @@ export default function FacultyDashboard() {
     Promise.all([
       analyticsService.faculty().then(({ data }) => data).catch(() => null),
       eventService.list({ page: 1, page_size: 5, sort_by: "created_at", sort_order: "desc" }).then(({ data }) => data.items || []).catch(() => []),
-      facultyApprovalService.pendingStudents().then(({ data }) => data || []).catch(() => []),
-    ]).then(([a, ev, students]) => {
+      facultyApprovalService.studentApprovals().then(({ data }) => data).catch(() => null),
+      volunteerApprovalService.volunteerApprovals().then(({ data }) => data).catch(() => null),
+    ]).then(([a, ev, sData, vData]) => {
       setAnalytics(a);
       setRecentEvents(ev);
-      setPendingStudents(students);
+      if (sData) {
+        setStudentStats({
+          total_count: sData.total_count ?? 0,
+          pending_count: sData.pending_count ?? 0,
+          approved_count: sData.approved_count ?? 0,
+          rejected_count: sData.rejected_count ?? 0,
+        });
+        const pending = (sData.students || []).filter(
+          (s) => (s.approval_status || "PENDING").toUpperCase() === "PENDING"
+        );
+        setPendingStudents(pending);
+      }
+      if (vData) {
+        setVolunteerStats({
+          total_count: vData.total_count ?? 0,
+          pending_count: vData.pending_count ?? 0,
+          approved_count: vData.approved_count ?? 0,
+          rejected_count: vData.rejected_count ?? 0,
+        });
+      }
       setLoading(false);
     });
   };
@@ -113,13 +156,109 @@ export default function FacultyDashboard() {
           <p style={{ color: "var(--text-secondary)", fontSize: 14.5 }}>{user?.department || "Department Administrator"}</p>
         </div>
         <div className="btn-group" style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          <Link to="/faculty/events" className="btn btn-primary btn-sm">
+          <Link to="/faculty/student-approvals" className="btn btn-primary btn-sm">
+            <FiUsers /> Student Approvals
+          </Link>
+          <Link to="/faculty/volunteer-approvals" className="btn btn-outline btn-sm">
+            <FiAward /> Volunteer Approvals
+          </Link>
+          <Link to="/faculty/events" className="btn btn-outline btn-sm">
             <FiPlusSquare /> Manage Events
           </Link>
           <Link to="/faculty/certificates" className="btn btn-outline btn-sm">
             Issue Certificates
           </Link>
         </div>
+      </div>
+
+      {/* Student Approval Statistics (Live database counters) */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            <FiUsers color="#6366f1" /> Student Approval Statistics
+          </h2>
+          <Link
+            to="/faculty/student-approvals"
+            style={{ fontSize: "0.85rem", color: "var(--color-primary, #6366f1)", fontWeight: 600, textDecoration: "none" }}
+          >
+            Manage Student Approvals &rarr;
+          </Link>
+        </div>
+        {loading ? (
+          <SkeletonGrid count={4} />
+        ) : (
+          <div className="grid-cards-4">
+            <StatCard
+              icon={<FiUsers />}
+              label="Total Students"
+              value={studentStats.total_count}
+              accent="#8b5cf6"
+            />
+            <StatCard
+              icon={<FiClock />}
+              label="Pending Students"
+              value={studentStats.pending_count}
+              accent="#f59e0b"
+            />
+            <StatCard
+              icon={<FiCheckCircle />}
+              label="Approved Students"
+              value={studentStats.approved_count}
+              accent="#10b981"
+            />
+            <StatCard
+              icon={<FiXCircle />}
+              label="Rejected Students"
+              value={studentStats.rejected_count}
+              accent="#ef4444"
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Volunteer Approval Statistics (Live database counters) */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            <FiAward color="#0d9488" /> Volunteer Approval Statistics
+          </h2>
+          <Link
+            to="/faculty/volunteer-approvals"
+            style={{ fontSize: "0.85rem", color: "#0d9488", fontWeight: 600, textDecoration: "none" }}
+          >
+            Manage Volunteer Approvals &rarr;
+          </Link>
+        </div>
+        {loading ? (
+          <SkeletonGrid count={4} />
+        ) : (
+          <div className="grid-cards-4">
+            <StatCard
+              icon={<FiUsers />}
+              label="Total Volunteers"
+              value={volunteerStats.total_count}
+              accent="#0d9488"
+            />
+            <StatCard
+              icon={<FiClock />}
+              label="Pending Volunteers"
+              value={volunteerStats.pending_count}
+              accent="#f59e0b"
+            />
+            <StatCard
+              icon={<FiCheckCircle />}
+              label="Approved Volunteers"
+              value={volunteerStats.approved_count}
+              accent="#10b981"
+            />
+            <StatCard
+              icon={<FiXCircle />}
+              label="Rejected Volunteers"
+              value={volunteerStats.rejected_count}
+              accent="#ef4444"
+            />
+          </div>
+        )}
       </div>
 
       {loading ? (

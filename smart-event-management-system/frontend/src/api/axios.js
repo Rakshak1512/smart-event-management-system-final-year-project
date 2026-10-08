@@ -5,16 +5,27 @@ export const API_BASE_URL = (() => {
   const raw = (import.meta.env.VITE_API_URL || "").trim();
   const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
+  // In local development or through Vite, always route via relative "/api" through Vite's proxy.
+  // This avoids Windows IPv6 (::1) socket hangs, eliminates CORS preflight latency,
+  // and allows seamless connections whether using localhost, 127.0.0.1, LAN IP, or Cloudflare Tunnel.
+  if (isLocal) {
+    if (raw && !raw.includes("localhost") && !raw.includes("127.0.0.1")) {
+      const clean = raw.replace(/\/+$/, "");
+      return clean.endsWith("/api") ? clean : `${clean}/api`;
+    }
+    return "/api";
+  }
+
+  // When accessed via external URL / Cloudflare Tunnel / Cloudflare Pages / Render
   if (raw) {
-    // If running in browser on a non-localhost domain (like Cloudflare Pages) but raw URL was left pointing to localhost, fallback to /api
-    if (!isLocal && (raw.includes("localhost") || raw.includes("127.0.0.1"))) {
+    if (raw.includes("localhost") || raw.includes("127.0.0.1")) {
       return "/api";
     }
     const clean = raw.replace(/\/+$/, "");
     return clean.endsWith("/api") ? clean : `${clean}/api`;
   }
 
-  return isLocal ? "http://localhost:8000/api" : "/api";
+  return "/api";
 })();
 
 const api = axios.create({

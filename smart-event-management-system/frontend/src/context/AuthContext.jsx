@@ -69,69 +69,92 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async ({ email, password, role, remember_me }) => {
-    if (!firebaseConfigured) throw new Error("Firebase Authentication is not configured.");
+    if (firebaseConfigured) {
+      try {
+        const firebaseUser = await signInFirebaseUser(email, password);
 
-    try {
-      const firebaseUser = await signInFirebaseUser(email, password);
+        if (!firebaseUser.emailVerified) {
+          throw new Error("Please verify your email first. Check your inbox for the Firebase verification link.");
+        }
 
-      if (!firebaseUser.emailVerified) {
-        throw new Error("Please verify your email first. Check your inbox for the Firebase verification link.");
+        const idToken = await firebaseUser.getIdToken(true);
+        const { data } = await api.post("/auth/firebase/session", {
+          id_token: idToken,
+          role,
+          remember_me,
+        });
+
+        persistSession(data);
+        setUser(data.user);
+        return data.user;
+      } catch (firebaseError) {
+        if (firebaseError?.message?.includes("verify your email first")) {
+          throw firebaseError;
+        }
+
+        // Existing EventSphere accounts may predate Firebase Authentication or Firebase may fail.
+        // Fall back to the backend API; a successful legacy login automatically
+        // provisions/synchronizes the Firebase account on the backend.
+        const code = firebaseError?.code || "";
+        const allowLegacyFallback = [
+          "auth/user-not-found",
+          "auth/invalid-credential",
+          "auth/invalid-login-credentials",
+          "auth/operation-not-allowed",
+          "auth/network-request-failed",
+        ].includes(code) || !code;
+
+        if (!allowLegacyFallback) throw firebaseError;
       }
-
-      const idToken = await firebaseUser.getIdToken(true);
-      const { data } = await api.post("/auth/firebase/session", {
-        id_token: idToken,
-        role,
-        remember_me,
-      });
-
-      persistSession(data);
-      setUser(data.user);
-      return data.user;
-    } catch (firebaseError) {
-      // Existing EventSphere accounts may predate Firebase Authentication.
-      // Fall back once to the legacy API; a successful legacy login automatically
-      // provisions/synchronizes the Firebase account on the backend.
-      const code = firebaseError?.code || "";
-      const allowLegacyFallback = [
-        "auth/user-not-found",
-        "auth/invalid-credential",
-        "auth/invalid-login-credentials",
-        "auth/operation-not-allowed",
-      ].includes(code);
-
-      if (!allowLegacyFallback) throw firebaseError;
-
-      const { data } = await api.post("/auth/login", {
-        email,
-        password,
-        role,
-        remember_me,
-      });
-      persistSession(data);
-      setUser(data.user);
-      return data.user;
     }
+
+    // Direct backend authentication via FastAPI JWT
+    const { data } = await api.post("/auth/login", {
+      email,
+      password,
+      role,
+      remember_me,
+    });
+    persistSession(data);
+    setUser(data.user);
+    return data.user;
   };
 
   const register = async (payload) => {
-    if (!firebaseConfigured) throw new Error("Firebase Authentication is not configured.");
-    const firebaseUser = await registerFirebaseUser(payload.email, payload.password, payload.name);
-    const idToken = await firebaseUser.getIdToken(true);
+    if (firebaseConfigured) {
+      const firebaseUser = await registerFirebaseUser(payload.email, payload.password, payload.name);
+      const idToken = await firebaseUser.getIdToken(true);
 
-    const { data } = await api.post("/auth/firebase/register", {
-      id_token: idToken,
+      const { data } = await api.post("/auth/firebase/register", {
+        id_token: idToken,
+        name: payload.name,
+        registration_number: payload.registration_number,
+        admin_id: payload.admin_id,
+        department: payload.department,
+        semester: payload.semester,
+        role: payload.role,
+      });
+
+      return {
+        ...data,
+        emailVerificationRequired: !firebaseUser.emailVerified,
+      };
+    }
+
+    // Direct backend registration
+    const { data } = await api.post("/auth/register", {
       name: payload.name,
+      email: payload.email,
+      password: payload.password,
+      role: payload.role,
       registration_number: payload.registration_number,
       admin_id: payload.admin_id,
       department: payload.department,
       semester: payload.semester,
-      role: payload.role,
     });
-
     return {
       ...data,
-      emailVerificationRequired: !firebaseUser.emailVerified,
+      emailVerificationRequired: true,
     };
   };
 
@@ -179,6 +202,7 @@ export function AuthProvider({ children }) {
     <AuthContext.Provider
       value={{
         user,
+        setUser: updateUser,
         loading,
         firebaseConfigured,
         firebaseAuth,

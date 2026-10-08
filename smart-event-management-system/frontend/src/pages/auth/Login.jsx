@@ -30,27 +30,32 @@ export default function Login() {
   const update = (field) => (e) =>
     setForm((f) => ({ ...f, [field]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
-  const getDashboardDestination = (userRole) => {
-    const r = (userRole || "").toLowerCase();
-    if (r === "admin") return "/admin/dashboard";
-    if (r === "faculty") return "/faculty/dashboard";
-    if (r === "volunteer") return "/volunteer/dashboard";
+  const getDashboardDestination = (user) => {
+    const userRole = (user?.role || "").toLowerCase();
+    const status = (user?.approval_status || "APPROVED").toUpperCase();
+    if (userRole !== "admin" && status !== "APPROVED" && status !== "ACTIVE") {
+      return "/awaiting-approval";
+    }
+    if (userRole === "admin") return "/admin/dashboard";
+    if (userRole === "faculty") return "/faculty/dashboard";
+    if (userRole === "volunteer") return "/volunteer/dashboard";
     return "/student/dashboard";
   };
 
   const getAuthErrorMessage = (err) => {
     if (!err) return "Login failed. Please check your credentials.";
-    if (err.code === "ERR_NETWORK" || !err.response) {
-      return "Authentication server is unavailable. Please make sure the EventSphere backend is running at http://localhost:8000.";
+    if (err.code === "ERR_NETWORK" || err.message === "Network Error") {
+      return "Authentication server is unavailable. Please make sure the EventSphere backend is running.";
     }
-    const status = err.response.status;
-    const detail = err.response.data?.detail;
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail;
     if (typeof detail === "string") return detail;
     if (Array.isArray(detail) && detail.length > 0) return detail[0].message || detail[0];
     if (status === 401) return "Invalid email or password.";
     if (status === 403) return "Your account does not have permission for this role, or email is unverified.";
     if (status === 404) return "Account not found. Please register first.";
     if (status >= 500) return "Authentication service encountered an error. Please try again.";
+    if (err.message) return err.message;
     return "Login failed. Please check your credentials.";
   };
 
@@ -76,7 +81,7 @@ export default function Login() {
       });
       setIsTestModalOpen(false);
       toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
-      const dest = location.state?.from || getDashboardDestination(user.role);
+      const dest = getDashboardDestination(user);
       navigate(dest, { replace: true });
     } catch (err) {
       if (!err.response) {
@@ -108,7 +113,7 @@ export default function Login() {
     try {
       const user = await login({ ...form, role });
       toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
-      const dest = location.state?.from || getDashboardDestination(user.role);
+      const dest = getDashboardDestination(user);
       navigate(dest, { replace: true });
     } catch (err) {
       const msg = getAuthErrorMessage(err);

@@ -1,6 +1,6 @@
 import re
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -22,12 +22,14 @@ class UserCreate(BaseModel):
     phone: Optional[str] = Field(None, max_length=20)
     department: Optional[str] = Field(None, max_length=100)
     semester: Optional[str] = Field(None, max_length=20)
+    course: Optional[str] = Field(None, max_length=100)
+    designation: Optional[str] = Field(None, max_length=100)
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     confirm_password: str
     role: RoleEnum = RoleEnum.student
 
-    @field_validator("registration_number", "admin_id", "phone", "department", "semester", mode="before")
+    @field_validator("registration_number", "admin_id", "phone", "department", "semester", "course", "designation", mode="before")
     @classmethod
     def normalize_empty_strings(cls, v):
         if isinstance(v, str):
@@ -82,6 +84,8 @@ class FirebaseRegisterRequest(BaseModel):
     admin_id: Optional[str] = Field(None, max_length=50)
     department: Optional[str] = Field(None, max_length=100)
     semester: Optional[str] = Field(None, max_length=20)
+    course: Optional[str] = Field(None, max_length=100)
+    designation: Optional[str] = Field(None, max_length=100)
     role: RoleEnum = RoleEnum.student
 
 
@@ -96,19 +100,26 @@ class FirebasePasswordResetPrepareRequest(BaseModel):
 
 
 class UserOut(BaseModel):
-    id: int
+    id: Union[int, str]
     name: str
     registration_number: Optional[str] = None
     admin_id: Optional[str] = None
     phone: Optional[str] = None
     department: Optional[str] = None
     semester: Optional[str] = None
+    course: Optional[str] = None
+    designation: Optional[str] = None
     email: EmailStr
     role: RoleEnum
     profile_picture: Optional[str] = None
     is_email_verified: bool
     is_active: bool = True
-    approval_status: Optional[str] = "ACTIVE"
+    approval_status: str = "APPROVED"
+    approved_by: Optional[Union[int, str]] = None
+    approved_at: Optional[datetime] = None
+    rejected_by: Optional[Union[int, str]] = None
+    rejected_at: Optional[datetime] = None
+    rejection_reason: Optional[str] = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -119,6 +130,8 @@ class UserUpdate(BaseModel):
     phone: Optional[str] = Field(None, max_length=20)
     department: Optional[str] = Field(None, max_length=100)
     semester: Optional[str] = Field(None, max_length=20)
+    course: Optional[str] = Field(None, max_length=100)
+    designation: Optional[str] = Field(None, max_length=100)
 
 
 class ChangePassword(BaseModel):

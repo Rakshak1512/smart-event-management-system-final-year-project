@@ -15,7 +15,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 
-from app.dependencies import get_current_user
+from app.dependencies import get_current_approved_user
 from app.models.user import User
 from app.db import firestore_service as db_service
 
@@ -42,7 +42,7 @@ class GlobalSearchResponse(BaseModel):
 @router.get("/global", response_model=GlobalSearchResponse)
 def global_search(
     q: str = Query(..., min_length=1, max_length=100, description="Search query string"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_approved_user),
 ):
     query_str = q.strip().lower()
     if not query_str:

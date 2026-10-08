@@ -12,6 +12,9 @@ import {
   FiArrowRight,
   FiRefreshCw,
   FiLayers,
+  FiClock,
+  FiCheckCircle,
+  FiXCircle,
 } from "react-icons/fi";
 import StatCard from "../../components/dashboard/StatCard.jsx";
 import { SkeletonGrid } from "../../components/ui/Loader.jsx";
@@ -27,19 +30,22 @@ export default function AdminDashboard() {
   const [summary, setSummary] = useState(null);
   const [facultyList, setFacultyList] = useState([]);
   const [recentEvents, setRecentEvents] = useState([]);
+  const [facultyApprovalsData, setFacultyApprovalsData] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const fetchDashboard = async (showLoader = true) => {
     if (showLoader) setLoading(true);
     try {
-      const [sumRes, facRes, evRes] = await Promise.all([
+      const [sumRes, facRes, evRes, appRes] = await Promise.all([
         adminService.reportsSummary().then(({ data }) => data).catch(() => null),
         adminService.facultyList().then(({ data }) => data || []).catch(() => []),
         eventService.list({ page: 1, page_size: 5, sort_by: "created_at", sort_order: "desc" }).then(({ data }) => data.items || []).catch(() => []),
+        adminService.facultyApprovals().then(({ data }) => data).catch(() => null),
       ]);
       setSummary(sumRes);
       setFacultyList(facRes);
       setRecentEvents(evRes);
+      setFacultyApprovalsData(appRes);
     } catch (err) {
       console.error("Admin dashboard fetch error:", err);
     } finally {
@@ -103,7 +109,10 @@ export default function AdminDashboard() {
         </div>
 
         <div className="btn-group" style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <Link to="/admin/assignments" className="btn btn-primary btn-sm">
+          <Link to="/admin/faculty-approvals" className="btn btn-primary btn-sm">
+            <FiShield /> Faculty Approvals
+          </Link>
+          <Link to="/admin/assignments" className="btn btn-outline btn-sm">
             <FiPlus /> Assign Work
           </Link>
           <Link to="/admin/reports" className="btn btn-outline btn-sm">
@@ -117,6 +126,106 @@ export default function AdminDashboard() {
             <FiRefreshCw className={loading ? "spin" : ""} size={16} />
           </button>
         </div>
+      </div>
+
+      {/* Pending Faculty Approvals Banner */}
+      {facultyApprovalsData?.pending_count > 0 && (
+        <div
+          className="glass-card"
+          style={{
+            marginBottom: 24,
+            padding: "18px 22px",
+            background: "linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(245, 158, 11, 0.04))",
+            borderRadius: 16,
+            border: "1px solid rgba(245, 158, 11, 0.35)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 16,
+            boxShadow: "0 6px 24px rgba(245, 158, 11, 0.12)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <span
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 12,
+                background: "rgba(245, 158, 11, 0.2)",
+                color: "#fbbf24",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontWeight: 800,
+                fontSize: 19,
+                boxShadow: "0 0 12px rgba(245, 158, 11, 0.25)",
+              }}
+            >
+              {facultyApprovalsData.pending_count}
+            </span>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#fbbf24" }}>
+                Faculty Registrations Pending Admin Approval
+              </h3>
+              <p style={{ margin: "3px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
+                {facultyApprovalsData.pending_count} new faculty coordinator{facultyApprovalsData.pending_count === 1 ? " is" : "s are"} waiting for your authorization.
+              </p>
+            </div>
+          </div>
+          <Link
+            to="/admin/faculty-approvals"
+            className="btn btn-primary btn-sm"
+            style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 10 }}
+          >
+            <FiShield size={14} /> Review Approvals ({facultyApprovalsData.pending_count}) &rarr;
+          </Link>
+        </div>
+      )}
+
+      {/* Faculty Approval Statistics (Live database counters) */}
+      <div style={{ marginBottom: 28 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <h2 style={{ fontSize: "1.1rem", fontWeight: 700, margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
+            <FiShield color="#8b5cf6" /> Faculty Approval Statistics
+          </h2>
+          <Link
+            to="/admin/faculty-approvals"
+            style={{ fontSize: "0.85rem", color: "var(--color-primary, #8b5cf6)", fontWeight: 600, textDecoration: "none" }}
+          >
+            Manage Faculty Approvals &rarr;
+          </Link>
+        </div>
+        {loading ? (
+          <SkeletonGrid count={4} />
+        ) : (
+          <div className="grid-cards-4">
+            <StatCard
+              icon={<FiUsers />}
+              label="Total Faculty"
+              value={facultyApprovalsData?.total_count ?? 0}
+              accent="#8b5cf6"
+            />
+            <StatCard
+              icon={<FiClock />}
+              label="Pending Faculty"
+              value={facultyApprovalsData?.pending_count ?? 0}
+              accent="#f59e0b"
+            />
+            <StatCard
+              icon={<FiCheckCircle />}
+              label="Approved Faculty"
+              value={facultyApprovalsData?.approved_count ?? 0}
+              accent="#10b981"
+            />
+            <StatCard
+              icon={<FiXCircle />}
+              label="Rejected Faculty"
+              value={facultyApprovalsData?.rejected_count ?? 0}
+              accent="#ef4444"
+            />
+          </div>
+        )}
       </div>
 
       {/* KPI Stats */}

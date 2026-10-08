@@ -228,21 +228,103 @@ export const resultService = {
 export const adminService = {
   facultyList: () => api.get("/admin/faculty"),
   pendingFaculty: () => api.get("/admin/pending-faculty"),
+  facultyApprovals: () => api.get("/admin/faculty-approvals"),
   approveFaculty: (facultyId) => api.post(`/admin/faculty/${facultyId}/approve`),
   rejectFaculty: (facultyId, reason) => api.post(`/admin/faculty/${facultyId}/reject`, { reason }),
+  removeFaculty: (facultyId) => api.delete(`/admin/faculty/${facultyId}`),
   assignments: () => api.get("/admin/assignments"),
   facultyAssignments: (facultyId) => api.get(`/admin/assignments/faculty/${facultyId}`),
   createAssignment: (payload) => api.post("/admin/assignments", payload),
   updateAssignment: (id, payload) => api.put(`/admin/assignments/${id}`, payload),
   deleteAssignment: (id) => api.delete(`/admin/assignments/${id}`),
   reportsSummary: () => api.get("/admin/reports/summary"),
+  downloadFacultyPdf: async (statusType = "all") => {
+    const cleanType = (statusType || "all").toLowerCase();
+    const response = await api.get(`/admin/reports/faculty/${cleanType}/pdf`, {
+      responseType: "blob",
+    });
+    const filenameMap = {
+      pending: "Pending Faculty.pdf",
+      approved: "Approved Faculty.pdf",
+      rejected: "Rejected Faculty.pdf",
+      all: "All Faculty.pdf",
+    };
+    const filename = filenameMap[cleanType] || "Faculty Report.pdf";
+    const blob = new Blob([response.data], { type: "application/pdf" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return true;
+  },
 };
 
 /* ---------------- Faculty Approval Services ---------------- */
 export const facultyApprovalService = {
   pendingStudents: () => api.get("/faculty/pending-students"),
+  studentApprovals: () => api.get("/faculty/student-approvals"),
   approveStudent: (studentId) => api.post(`/faculty/students/${studentId}/approve`),
   rejectStudent: (studentId, reason) => api.post(`/faculty/students/${studentId}/reject`, { reason }),
+  removeStudent: (studentId) => api.delete(`/faculty/students/${studentId}`),
+  downloadStudentPdf: async (statusType = "all") => {
+    const cleanType = (statusType || "all").toLowerCase();
+    const response = await api.get(`/faculty/reports/students/${cleanType}/pdf`, {
+      responseType: "blob",
+    });
+    const filenameMap = {
+      pending: "Pending Students.pdf",
+      approved: "Approved Students.pdf",
+      rejected: "Rejected Students.pdf",
+      all: "All Students.pdf",
+    };
+    const filename = filenameMap[cleanType] || "Student Report.pdf";
+    const blob = new Blob([response.data], { type: "application/pdf" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return true;
+  },
+};
+
+/* ---------------- Volunteer Approval Services (Faculty) ---------------- */
+export const volunteerApprovalService = {
+  pendingVolunteers: () => api.get("/faculty/pending-volunteers"),
+  volunteerApprovals: () => api.get("/faculty/volunteer-approvals"),
+  approveVolunteer: (volunteerId) => api.post(`/faculty/volunteers/${volunteerId}/approve`),
+  rejectVolunteer: (volunteerId, reason) => api.post(`/faculty/volunteers/${volunteerId}/reject`, { reason }),
+  removeVolunteer: (volunteerId) => api.delete(`/faculty/volunteers/${volunteerId}`),
+  downloadVolunteerPdf: async (statusType = "all") => {
+    const cleanType = (statusType || "all").toLowerCase();
+    const response = await api.get(`/faculty/reports/volunteers/${cleanType}/pdf`, {
+      responseType: "blob",
+    });
+    const filenameMap = {
+      pending: "Pending Volunteers.pdf",
+      approved: "Approved Volunteers.pdf",
+      rejected: "Rejected Volunteers.pdf",
+      all: "All Volunteers.pdf",
+    };
+    const filename = filenameMap[cleanType] || "Volunteer Report.pdf";
+    const blob = new Blob([response.data], { type: "application/pdf" });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", filename);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+    return true;
+  },
 };
 
 /* ---------------- Faculty Task Services ---------------- */
