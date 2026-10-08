@@ -1,7 +1,7 @@
-"""
-Password hashing (bcrypt) and JWT creation / verification.
-"""
+import hashlib
+import hmac
 import random
+import secrets
 import string
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -51,6 +51,24 @@ def decode_token(token: str) -> Optional[dict]:
         return None
 
 
+
+
 def generate_otp(length: int = None) -> str:
-    length = length or settings.OTP_LENGTH
-    return "".join(random.choices(string.digits, k=length))
+    """Generate a cryptographically secure 6-digit numeric OTP."""
+    target_len = length or settings.OTP_LENGTH or 6
+    return "".join(secrets.choice(string.digits) for _ in range(target_len))
+
+
+def hash_otp(otp_code: str) -> str:
+    """Create a secure HMAC-SHA256 digest of the OTP code."""
+    clean_otp = str(otp_code).strip()
+    key = (settings.SECRET_KEY or "eventsphere-otp-secret").encode("utf-8")
+    return hmac.new(key, clean_otp.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_otp_hash(plain_otp: str, hashed_otp: str) -> bool:
+    """Compare plain OTP against hashed OTP using constant-time comparison."""
+    if not plain_otp or not hashed_otp:
+        return False
+    computed = hash_otp(plain_otp)
+    return hmac.compare_digest(computed, str(hashed_otp).strip())

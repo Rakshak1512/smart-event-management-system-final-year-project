@@ -12,7 +12,9 @@ from app.core.security import (
     create_refresh_token,
     decode_token,
     generate_otp,
+    hash_otp,
     hash_password,
+    verify_otp_hash,
     verify_password,
 )
 from app.db import firestore_service as db_service
@@ -248,7 +250,8 @@ def register(payload: UserCreate, request: Request):
 
     try:
         otp = generate_otp()
-        logger.info("[AUTH] [OTP] OTP generated for %s (Expires in %d min)", _mask_email(clean_email), settings.OTP_EXPIRE_MINUTES)
+        hashed_otp = hash_otp(otp)
+        logger.info("[AUTH] [OTP] Secure OTP generated for %s (Expires in %d min)", _mask_email(clean_email), settings.OTP_EXPIRE_MINUTES)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
 
         pending_data = {
@@ -260,12 +263,16 @@ def register(payload: UserCreate, request: Request):
             "admin_id": admin_id or (reg_num if role_str == "admin" else None),
             "department": dept,
             "semester": sem,
+            "hashed_otp": hashed_otp,
             "otp_code": otp,
+            "attempts": 0,
+            "max_attempts": settings.OTP_MAX_ATTEMPTS,
+            "last_sent_at": datetime.now(timezone.utc),
             "expires_at": expires_at,
             "created_at": datetime.now(timezone.utc),
         }
         db_service.save_pending_registration(pending_data)
-        logger.info("[AUTH] [FIREBASE] Pending registration saved for %s", _mask_email(clean_email))
+        logger.info("[AUTH] [OTP] Pending registration saved securely for %s", _mask_email(clean_email))
 
         # Dispatch OTP via Resend
         try:
@@ -276,7 +283,7 @@ def register(payload: UserCreate, request: Request):
             logger.error("[AUTH] [EMAIL] Unexpected error delivering OTP to %s: %s", _mask_email(clean_email), mail_err)
             email_sent = False
 
-        # Return unverified placeholder UserOut object
+        # Return unverified placeholder UserOut object without exposing OTP
         return UserOut(
             id=0,
             name=payload.name.strip(),
@@ -307,17 +314,46 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
     # 1. Check pending registration (staged before adding to users table)
     pending = db_service.get_pending_registration(clean_email)
     if pending:
-        if str(pending.get("otp_code", "")).strip() != otp_input:
-            logger.warning("OTP verification failed (invalid OTP) for %s", _mask_email(clean_email))
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP. Please try again.")
+        # Check attempts limit
+        attempts = int(pending.get("attempts", 0))
+        max_attempts = int(pending.get("max_attempts", settings.OTP_MAX_ATTEMPTS))
+        if attempts >= max_attempts:
+            logger.warning("OTP verification failed (max attempts exceeded) for %s", _mask_email(clean_email))
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Maximum verification attempts exceeded. Please request a new OTP.",
+            )
 
+        # Check expiration
         exp = pending.get("expires_at")
         if isinstance(exp, datetime):
             if exp.tzinfo is None:
                 exp = exp.replace(tzinfo=timezone.utc)
             if exp < datetime.now(timezone.utc):
                 logger.warning("OTP verification failed (expired OTP) for %s", _mask_email(clean_email))
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This OTP has expired. Please request a new OTP.")
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This OTP has expired. Please request a new OTP.",
+                )
+
+        # Constant-time secure verification
+        hashed_otp = pending.get("hashed_otp")
+        is_match = False
+        if hashed_otp and verify_otp_hash(otp_input, hashed_otp):
+            is_match = True
+        elif pending.get("otp_code") and str(pending.get("otp_code")).strip() == otp_input:
+            is_match = True
+
+        if not is_match:
+            pending["attempts"] = attempts + 1
+            db_service.save_pending_registration(pending)
+            logger.warning(
+                "OTP verification failed (invalid OTP) for %s (attempt %d/%d)",
+                _mask_email(clean_email),
+                attempts + 1,
+                max_attempts,
+            )
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid OTP. Please try again.")
 
         # Determine approval status: students & volunteers require faculty approval; faculty require admin approval
         p_role = str(pending.get("role", "")).lower()
@@ -471,10 +507,28 @@ def resend_verification_otp(payload: ResendOtpRequest):
     # 2. Check pending registration
     pending = db_service.get_pending_registration(clean_email)
     if pending:
+        # Check cooldown
+        last_sent = pending.get("last_sent_at")
+        if isinstance(last_sent, datetime):
+            if last_sent.tzinfo is None:
+                last_sent = last_sent.replace(tzinfo=timezone.utc)
+            elapsed = (datetime.now(timezone.utc) - last_sent).total_seconds()
+            cooldown = settings.OTP_RESEND_COOLDOWN_SECONDS or 60
+            if elapsed < cooldown:
+                wait_sec = int(cooldown - elapsed)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Please wait {wait_sec} seconds before requesting a new OTP.",
+                )
+
         otp = generate_otp()
+        hashed_otp = hash_otp(otp)
         logger.info("[AUTH] [OTP] New OTP generated for resend to %s", _mask_email(clean_email))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+        pending["hashed_otp"] = hashed_otp
         pending["otp_code"] = otp
+        pending["attempts"] = 0
+        pending["last_sent_at"] = datetime.now(timezone.utc)
         pending["expires_at"] = expires_at
         db_service.save_pending_registration(pending)
 

@@ -58,8 +58,15 @@ def require_role(*roles: RoleEnum):
         if user_role == "admin":
             return current_user
 
+        if getattr(current_user, "is_deleted", False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="ACCOUNT_REMOVED",
+            )
+
         # Enforce strict approval status for non-admin roles
-        approval_st = str(getattr(current_user, "approval_status", "APPROVED") or "APPROVED").upper().strip()
+        raw_st = getattr(current_user, "approval_status", None)
+        approval_st = str(raw_st or "PENDING").upper().strip()
         if approval_st in ("ACTIVE", "APPROVED"):
             return current_user
 
@@ -97,8 +104,15 @@ def get_current_approved_user(current_user: User = Depends(get_current_user)) ->
     if user_role == "admin":
         return current_user
 
+    if getattr(current_user, "is_deleted", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="ACCOUNT_REMOVED",
+        )
+
     # Enforce strict approval status for non-admin roles
-    approval_st = str(getattr(current_user, "approval_status", "APPROVED") or "APPROVED").upper().strip()
+    raw_st = getattr(current_user, "approval_status", None)
+    approval_st = str(raw_st or "PENDING").upper().strip()
     if approval_st in ("ACTIVE", "APPROVED"):
         return current_user
 

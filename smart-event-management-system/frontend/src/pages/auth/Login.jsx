@@ -32,7 +32,7 @@ export default function Login() {
 
   const getDashboardDestination = (user) => {
     const userRole = (user?.role || "").toLowerCase();
-    const status = (user?.approval_status || "APPROVED").toUpperCase();
+    const status = (user?.approval_status || (userRole === "admin" ? "APPROVED" : "PENDING")).toUpperCase();
     if (userRole !== "admin" && status !== "APPROVED" && status !== "ACTIVE") {
       return "/awaiting-approval";
     }

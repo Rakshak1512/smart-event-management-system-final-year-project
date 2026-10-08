@@ -113,8 +113,8 @@ export default function AwaitingApproval() {
   const statusLabel = isRejected
     ? "Account Rejected"
     : role === "faculty"
-    ? "Pending Admin Approval"
-    : "Pending Faculty Approval";
+    ? "Waiting for Admin Approval"
+    : "Waiting for Faculty Approval";
 
   return (
     <PageTransition>
@@ -346,27 +346,15 @@ export default function AwaitingApproval() {
                 </>
               ) : role === "faculty" ? (
                 <>
-                  Your faculty account has been created successfully.
-                  <br /><br />
-                  Your account is currently waiting for administrator approval.
-                  <br /><br />
-                  You will receive an email once your account has been approved.
+                  Your email has been verified successfully. Your faculty account is now waiting for administrator approval.
                 </>
               ) : role === "volunteer" ? (
                 <>
-                  Your volunteer account has been created successfully.
-                  <br /><br />
-                  Your account is currently waiting for faculty approval.
-                  <br /><br />
-                  You will receive an email once your account has been approved.
+                  Your email has been verified successfully. Your volunteer account is now waiting for faculty approval.
                 </>
               ) : (
                 <>
-                  Your student account has been created successfully.
-                  <br /><br />
-                  Your account is currently waiting for faculty approval.
-                  <br /><br />
-                  You will receive an email once your account has been approved.
+                  Your email has been verified successfully. Your student account is now waiting for faculty approval.
                 </>
               )}
             </p>

@@ -81,8 +81,8 @@ export default function Register() {
       };
 
       await register(payload);
-      toast.success("Account created! Check your email for a Firebase verification link.");
-      navigate("/verify-email", { state: { email: form.email, role: form.role } });
+      toast.success("Verification OTP sent to your email!");
+      navigate("/verify-email", { state: { email: form.email.trim().toLowerCase(), role: form.role, name: form.name.trim() } });
     } catch (err) {
       const detail = err.response?.data?.detail;
       let msg = "Registration failed. Please check your details.";

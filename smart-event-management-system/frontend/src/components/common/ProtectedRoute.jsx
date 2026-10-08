@@ -13,7 +13,7 @@ export default function ProtectedRoute({ allowedRoles }) {
   }
 
   const userRole = (user.role || "").toLowerCase();
-  const approvalStatus = (user.approval_status || "APPROVED").toUpperCase();
+  const approvalStatus = (user.approval_status || (userRole === "admin" ? "APPROVED" : "PENDING")).toUpperCase();
 
   // Admin accounts are always approved and bypass institutional approval
   if (userRole !== "admin") {

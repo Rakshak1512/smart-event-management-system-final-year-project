@@ -44,10 +44,13 @@ class Settings(BaseSettings):
     # Option 3: Local Firestore Emulator (e.g. "localhost:8080")
     FIRESTORE_EMULATOR_HOST: str = ""
 
-    # Email Providers (Resend API & SMTP)
+    # Email Provider (Resend API)
     RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = ""
-    SMTP_HOST: str = "smtp.gmail.com"
+    RESEND_FROM_EMAIL: str = "onboarding@resend.dev"
+    EMAIL_PROVIDER: str = "resend"
+
+    # Legacy SMTP fallback (if configured)
+    SMTP_HOST: str = ""
     SMTP_PORT: int = 587
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
@@ -55,13 +58,8 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_USE_TLS: bool = True
 
-    # HTTPS email provider (recommended for Render Free)
-    EMAIL_PROVIDER: str = "auto"  # auto | resend | smtp
-    RESEND_API_KEY: str = ""
-    RESEND_FROM_EMAIL: str = ""
-
     # OTP
-    OTP_EXPIRE_MINUTES: int = 10
+    OTP_EXPIRE_MINUTES: int = 5
     OTP_LENGTH: int = 6
     OTP_RESEND_COOLDOWN_SECONDS: int = 60
     OTP_MAX_ATTEMPTS: int = 5

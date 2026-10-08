@@ -121,27 +121,7 @@ export function AuthProvider({ children }) {
   };
 
   const register = async (payload) => {
-    if (firebaseConfigured) {
-      const firebaseUser = await registerFirebaseUser(payload.email, payload.password, payload.name);
-      const idToken = await firebaseUser.getIdToken(true);
-
-      const { data } = await api.post("/auth/firebase/register", {
-        id_token: idToken,
-        name: payload.name,
-        registration_number: payload.registration_number,
-        admin_id: payload.admin_id,
-        department: payload.department,
-        semester: payload.semester,
-        role: payload.role,
-      });
-
-      return {
-        ...data,
-        emailVerificationRequired: !firebaseUser.emailVerified,
-      };
-    }
-
-    // Direct backend registration
+    // Direct backend registration sending Resend Email OTP
     const { data } = await api.post("/auth/register", {
       name: payload.name,
       email: payload.email,
@@ -156,6 +136,21 @@ export function AuthProvider({ children }) {
       ...data,
       emailVerificationRequired: true,
     };
+  };
+
+  const verifyEmailOtp = async ({ email, otp_code }) => {
+    const { data } = await api.post("/auth/verify-email", {
+      email,
+      otp_code,
+    });
+    return data;
+  };
+
+  const resendVerificationOtp = async ({ email }) => {
+    const { data } = await api.post("/auth/resend-verification-otp", {
+      email,
+    });
+    return data;
   };
 
   const refreshFirebaseSession = async (role, remember_me = false) => {
@@ -208,6 +203,8 @@ export function AuthProvider({ children }) {
         firebaseAuth,
         login,
         register,
+        verifyEmailOtp,
+        resendVerificationOtp,
         refreshFirebaseSession,
         logout,
         deleteAccount,

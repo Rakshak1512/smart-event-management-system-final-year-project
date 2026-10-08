@@ -165,7 +165,7 @@ def send_email_detailed(
     has_resend = bool((settings.RESEND_API_KEY or "").strip())
     has_smtp = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
 
-    # 1. Primary path: Resend API (strictly preferred when configured)
+    # 1. Primary path: Resend API
     if has_resend:
         ok, detail = _send_via_resend(to_addr, subject, html_body, text_body)
         if ok:
@@ -174,7 +174,7 @@ def send_email_detailed(
         # Development fallback only
         if settings.APP_ENV != "production" or settings.DEBUG:
             logger.info(
-                "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated (Subject: %s). Running in %s mode.",
+                "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated via Resend (Subject: %s). Running in %s mode.",
                 masked_to,
                 subject,
                 settings.APP_ENV,
@@ -182,25 +182,18 @@ def send_email_detailed(
             return True, "Email delivery recorded (development mode)"
         return False, "Unable to send verification email. Please try again later."
 
-    # 2. Secondary path: SMTP (only when Resend is NOT configured)
-    if has_smtp:
-        ok, detail = _send_via_smtp(to_addr, subject, html_body, text_body)
-        if ok:
-            return True, detail
-        logger.warning("[EMAIL] [SMTP] Delivery failed for %s: %s", masked_to, detail)
-
-    # 3. Development / Localhost Fallback
+    # 2. Development / Localhost Fallback (when RESEND_API_KEY is not set)
     if settings.APP_ENV != "production" or settings.DEBUG:
         logger.info(
-            "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated (Subject: %s). Running in %s mode.",
+            "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated via Resend (Subject: %s). Running in %s mode.",
             masked_to,
             subject,
             settings.APP_ENV,
         )
         return True, "Email delivery recorded (development mode)"
 
-    err_msg = "Unable to send verification email. Please try again later."
-    logger.error("[EMAIL] [DISPATCH_FAILED] No active email delivery succeeded for %s", masked_to)
+    err_msg = "Unable to send verification email. RESEND_API_KEY is not configured."
+    logger.error("[EMAIL] [RESEND_NOT_CONFIGURED] %s", err_msg)
     return False, err_msg
 
 
@@ -218,12 +211,12 @@ def send_otp_email(
     expiry_minutes: Optional[int] = None,
 ) -> Tuple[bool, str]:
     """
-    Send a 6-digit OTP verification email via SMTP.
+    Send a 6-digit OTP verification email via Resend.
     Returns (success: bool, message_or_error: str).
     """
-    exp_mins = expiry_minutes or settings.OTP_EXPIRE_MINUTES or 10
+    exp_mins = expiry_minutes or settings.OTP_EXPIRE_MINUTES or 5
     user_name = name or "User"
-    subject = f"{settings.APP_NAME} - Your OTP Verification Code"
+    subject = "EventSphere Email Verification OTP"
 
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -245,11 +238,11 @@ def send_otp_email(
     <!-- Body -->
     <div style="padding: 32px 28px;">
       <h2 style="margin: 0 0 12px; font-size: 20px; font-weight: 700; color: #f8fafc;">
-        Email Verification
+        Email Verification OTP
       </h2>
       <p style="margin: 0 0 20px; font-size: 14.5px; line-height: 1.6; color: #94a3b8;">
-        Hello <strong style="color: #f1f5f9;">{user_name}</strong>,<br>
-        Thank you for joining {settings.APP_NAME}. Please use the verification code below to confirm your email address:
+        Hello <strong style="color: #f1f5f9;">{user_name}</strong>,<br><br>
+        Your EventSphere verification OTP is:
       </p>
       
       <!-- OTP Box -->
@@ -260,37 +253,41 @@ def send_otp_email(
       </div>
       
       <!-- Expiry Notice -->
-      <div style="background: #0f172a; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px; display: flex; align-items: center;">
-        <p style="margin: 0; font-size: 13px; color: #cbd5e1;">
-          ⏱️ This OTP code expires in <strong>{exp_mins} minutes</strong>.
+      <div style="background: #0f172a; border-radius: 8px; padding: 12px 16px; margin-bottom: 24px;">
+        <p style="margin: 0; font-size: 13.5px; color: #cbd5e1;">
+          This OTP expires in <strong>{exp_mins} minutes</strong>.
         </p>
       </div>
       
       <!-- Security Warning -->
       <p style="margin: 0 0 8px; font-size: 13px; font-weight: 600; color: #f43f5e;">
-        ⚠️ Security Warning:
+        Do not share this OTP with anyone.
       </p>
-      <p style="margin: 0; font-size: 12.5px; line-height: 1.5; color: #64748b;">
-        Do not share this code with anyone. EventSphere staff will never ask for your verification code.
+      <p style="margin: 20px 0 0; font-size: 13.5px; line-height: 1.5; color: #94a3b8;">
+        Regards,<br>
+        <strong>EventSphere Team</strong>
       </p>
     </div>
     
     <!-- Footer -->
     <div style="background: #0f172a; padding: 18px 24px; text-align: center; border-top: 1px solid #334155;">
       <p style="margin: 0; font-size: 12px; color: #64748b;">
-        &copy; 2026 {settings.APP_NAME}. All rights reserved.<br>
-        If you did not request this code, you can safely ignore this email.
+        &copy; 2026 EventSphere. All rights reserved.<br>
+        If you did not request this OTP, you can safely ignore this email.
       </p>
     </div>
   </div>
-</body>
+ </body>
 </html>"""
 
     text_content = (
-        f"Your {settings.APP_NAME} verification code is:\n\n"
+        f"Hello {user_name},\n\n"
+        f"Your EventSphere verification OTP is:\n\n"
         f"{otp}\n\n"
         f"This OTP expires in {exp_mins} minutes.\n\n"
-        f"Do not share this code with anyone."
+        f"Do not share this OTP with anyone.\n\n"
+        f"Regards,\n"
+        f"EventSphere Team"
     )
 
     return send_email_detailed(to_email, subject, html_content, text_content)
@@ -676,7 +673,7 @@ def send_account_pending_approval_email(to_email: str, name: str, role: str) -> 
 
 def send_student_approved_email(to_email: str, name: str, uucms_id: Optional[str] = None) -> bool:
     """Send student account approval notification email via Resend."""
-    subject = "Your EventSphere Student Account Has Been Approved"
+    subject = "Your EventSphere student account has been approved."
     login_url = f"{settings.FRONTEND_URL}/login"
     dashboard_url = f"{settings.FRONTEND_URL}/student/dashboard"
     uucms_display = uucms_id or "Recorded with Faculty"
@@ -801,7 +798,7 @@ def send_student_rejected_email(to_email: str, name: str, reason: Optional[str] 
 
 def send_faculty_approved_email(to_email: str, name: str, faculty_id: Optional[str] = None) -> bool:
     """Send faculty account approval notification email via Resend."""
-    subject = "Your EventSphere Faculty Account Has Been Approved"
+    subject = "Your EventSphere faculty account has been approved."
     login_url = f"{settings.FRONTEND_URL}/login"
     dashboard_url = f"{settings.FRONTEND_URL}/faculty/dashboard"
     fac_id_display = faculty_id or "Recorded with Admin"
@@ -954,7 +951,7 @@ def send_admin_new_faculty_alert_email(admin_email: str, faculty_name: str, facu
 
 def send_volunteer_approved_email(to_email: str, name: str, volunteer_id: Optional[str] = None) -> bool:
     """Send volunteer account approval notification email via Resend."""
-    subject = "EventSphere Volunteer Account Approved"
+    subject = "Your EventSphere volunteer account has been approved."
     login_url = f"{settings.FRONTEND_URL}/login"
     dashboard_url = f"{settings.FRONTEND_URL}/volunteer/dashboard"
     vol_id_display = volunteer_id or "Recorded with Faculty"
