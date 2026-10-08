@@ -2,27 +2,19 @@ import axios from "axios";
 
 export const API_BASE_URL = (() => {
   if (typeof window === "undefined") return "/api";
-  const raw = (import.meta.env.VITE_API_URL || "http://localhost:8000").trim();
+  const raw = (import.meta.env.VITE_API_URL || "").trim();
   const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
-  if (isLocal) {
-    return raw.replace(/\/+$/, "").endsWith("/api")
-      ? raw.replace(/\/+$/, "")
-      : `${raw.replace(/\/+$/, "")}/api`;
-  }
-
-  // When accessed via external URL / Cloudflare Tunnel / Cloudflare Pages / Render
-  if (raw.startsWith("http://") || raw.startsWith("https://")) {
-    // If configured pointing to localhost but accessed from external device or tunnel, route through relative /api
-    if (raw.includes("localhost") || raw.includes("127.0.0.1")) {
+  if (raw) {
+    // If running in browser on a non-localhost domain (like Cloudflare Pages) but raw URL was left pointing to localhost, fallback to /api
+    if (!isLocal && (raw.includes("localhost") || raw.includes("127.0.0.1"))) {
       return "/api";
     }
-    return raw.replace(/\/+$/, "").endsWith("/api")
-      ? raw.replace(/\/+$/, "")
-      : `${raw.replace(/\/+$/, "")}/api`;
+    const clean = raw.replace(/\/+$/, "");
+    return clean.endsWith("/api") ? clean : `${clean}/api`;
   }
 
-  return "/api";
+  return isLocal ? "http://localhost:8000/api" : "/api";
 })();
 
 const api = axios.create({

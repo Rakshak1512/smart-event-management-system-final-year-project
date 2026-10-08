@@ -75,6 +75,26 @@ class EmailVerifyOtpRequest(BaseModel):
     remember_me: bool = False
 
 
+class FirebaseRegisterRequest(BaseModel):
+    id_token: str = Field(..., min_length=20)
+    name: str = Field(..., min_length=2, max_length=150)
+    registration_number: Optional[str] = Field(None, max_length=50)
+    admin_id: Optional[str] = Field(None, max_length=50)
+    department: Optional[str] = Field(None, max_length=100)
+    semester: Optional[str] = Field(None, max_length=20)
+    role: RoleEnum = RoleEnum.student
+
+
+class FirebaseSessionRequest(BaseModel):
+    id_token: str = Field(..., min_length=20)
+    role: RoleEnum
+    remember_me: bool = False
+
+
+class FirebasePasswordResetPrepareRequest(BaseModel):
+    email: EmailStr
+
+
 class UserOut(BaseModel):
     id: int
     name: str

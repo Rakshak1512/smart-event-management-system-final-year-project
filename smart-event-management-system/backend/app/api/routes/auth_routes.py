@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta, timezone
 import logging
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from firebase_admin import auth as firebase_auth_admin
 
 from app.core.config import settings
+from app.core.firebase_auth import verify_firebase_id_token
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -19,6 +22,9 @@ from app.schemas.user_schema import (
     EmailSendOtpRequest,
     EmailVerifyOtpRequest,
     ForgotPasswordRequest,
+    FirebaseRegisterRequest,
+    FirebaseSessionRequest,
+    FirebasePasswordResetPrepareRequest,
     ResendOtpRequest,
     ResetPasswordRequest,
     Token,
@@ -54,6 +60,150 @@ def _log(user_id, action: str, request: Request, details: str = None):
         )
     except Exception:
         pass
+
+
+@router.post("/firebase/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def firebase_register(payload: FirebaseRegisterRequest, request: Request):
+    """Create/synchronize the EventSphere profile after Firebase creates the account."""
+    try:
+        decoded = verify_firebase_id_token(payload.id_token)
+    except Exception as e:
+        logger.warning("Firebase registration token rejected: %s", e)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Firebase authentication token")
+
+    clean_email = decoded["email"]
+    token_verified = bool(decoded.get("email_verified"))
+    role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
+
+    if payload.role == RoleEnum.student and not payload.registration_number:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Registration number is required for students")
+    if payload.role == RoleEnum.admin and not (payload.admin_id or payload.registration_number):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Admin ID is required for admins")
+
+    existing = db_service.get_user_by_email(clean_email)
+    if existing and existing.is_email_verified:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="An account with this email already exists.")
+
+    if payload.registration_number and payload.role == RoleEnum.student:
+        existing_reg = db_service.get_user_by_reg_no(payload.registration_number)
+        if existing_reg and (not existing or existing_reg.id != existing.id):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration number already in use")
+
+    try:
+        if existing:
+            updates = {
+                "name": payload.name.strip(),
+                "role": role_str,
+                "registration_number": payload.registration_number or existing.registration_number,
+                "admin_id": payload.admin_id or existing.admin_id,
+                "department": payload.department or existing.department,
+                "semester": payload.semester or existing.semester,
+                "is_email_verified": token_verified,
+                "is_active": True,
+            }
+            user = db_service.update_user(existing.id, updates)
+        else:
+            user = db_service.create_user(
+                name=payload.name.strip(),
+                email=clean_email,
+                # Firebase owns password authentication. Keep a non-usable
+                # local hash for backward compatibility with existing schema.
+                hashed_password=hash_password(secrets.token_urlsafe(32)),
+                role=role_str,
+                registration_number=payload.registration_number,
+                admin_id=payload.admin_id,
+                department=payload.department,
+                semester=payload.semester,
+                is_email_verified=token_verified,
+                is_active=True,
+            )
+
+        logger.info(
+            "Firebase profile synchronized for %s (verified=%s)",
+            _mask_email(clean_email),
+            token_verified,
+        )
+        _log(user.id, "firebase_register", request)
+        return user
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Firebase registration failed for %s", _mask_email(clean_email))
+        raise HTTPException(status_code=500, detail="Unable to create your EventSphere profile")
+
+
+@router.post("/firebase/prepare-password-reset")
+def prepare_firebase_password_reset(payload: FirebasePasswordResetPrepareRequest):
+    """Provision a Firebase password account for a legacy EventSphere user before reset."""
+    clean_email = payload.email.strip().lower()
+    user = db_service.get_user_by_email(clean_email)
+
+    # Never reveal whether an email exists in EventSphere.
+    if not user:
+        return {"ready": True}
+
+    try:
+        try:
+            firebase_user = firebase_auth_admin.get_user_by_email(clean_email)
+        except firebase_auth_admin.UserNotFoundError:
+            firebase_user = firebase_auth_admin.create_user(
+                email=clean_email,
+                password=secrets.token_urlsafe(24),
+                email_verified=bool(user.is_email_verified),
+                display_name=user.name,
+            )
+        return {"ready": True, "firebase_user_exists": True}
+    except Exception as e:
+        logger.warning("Firebase reset preparation failed for %s: %s", _mask_email(clean_email), e)
+        # Keep the response generic; the frontend will show the standard reset message.
+        return {"ready": True}
+
+
+@router.post("/firebase/session", response_model=Token)
+def firebase_session(payload: FirebaseSessionRequest, request: Request):
+    """Exchange a verified Firebase ID token for the EventSphere API JWT."""
+    try:
+        decoded = verify_firebase_id_token(payload.id_token)
+    except Exception as e:
+        logger.warning("Firebase session token rejected: %s", e)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Firebase authentication token")
+
+    if not decoded.get("email_verified"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Please verify your email address before logging in.",
+        )
+
+    clean_email = decoded["email"]
+    role_str = payload.role.value if hasattr(payload.role, "value") else str(payload.role)
+    user = db_service.get_user_by_email(clean_email)
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Your EventSphere profile was not found. Please complete registration first.",
+        )
+
+    user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
+    if user_role_str != role_str.lower().strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account does not have permission for this role.",
+        )
+
+    if not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is currently inactive.")
+
+    if not user.is_email_verified:
+        user = db_service.update_user(user.id, {"is_email_verified": True}) or user
+
+    access_expires = timedelta(days=30) if payload.remember_me else None
+    role_val = user.role.value if hasattr(user.role, "value") else str(user.role)
+    access_token = create_access_token({"sub": str(user.id), "role": role_val}, access_expires)
+    refresh_token = create_refresh_token({"sub": str(user.id)})
+
+    _log(user.id, "firebase_login", request)
+    return Token(access_token=access_token, refresh_token=refresh_token, user=user)
 
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
@@ -381,6 +531,34 @@ def login(payload: UserLogin, request: Request):
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Your account is currently inactive.",
             )
+
+    # Migrate existing EventSphere password accounts into Firebase Authentication
+    # on the first successful legacy login. Firebase becomes the long-term
+    # credential provider without breaking existing users.
+    try:
+        firebase_user = None
+        try:
+            firebase_user = firebase_auth_admin.get_user_by_email(clean_email)
+        except firebase_auth_admin.UserNotFoundError:
+            firebase_user = None
+
+        if firebase_user:
+            firebase_auth_admin.update_user(
+                firebase_user.uid,
+                password=payload.password,
+                email_verified=True,
+                display_name=user.name,
+            )
+        else:
+            firebase_auth_admin.create_user(
+                email=clean_email,
+                password=payload.password,
+                email_verified=True,
+                display_name=user.name,
+            )
+        logger.info("Firebase account synchronized after legacy password login for %s", _mask_email(clean_email))
+    except Exception as e:
+        logger.warning("Firebase account synchronization skipped for %s: %s", _mask_email(clean_email), e)
 
     access_expires = timedelta(days=30) if payload.remember_me else None
     role_val = user.role.value if hasattr(user.role, "value") else str(user.role)

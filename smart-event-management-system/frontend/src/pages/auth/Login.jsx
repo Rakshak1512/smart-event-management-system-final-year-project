@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import toast from "react-hot-toast";
-import { FiMail, FiLock, FiEye, FiEyeOff, FiCalendar, FiCheckCircle } from "react-icons/fi";
+import { FiMail, FiLock, FiEye, FiEyeOff, FiCalendar, FiCheckCircle, FiArrowLeft } from "react-icons/fi";
 import ThemeToggle from "../../components/common/ThemeToggle.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
 import OTPInput from "../../components/common/OTPInput.jsx";
@@ -11,12 +11,11 @@ import { useAuth } from "../../context/AuthContext.jsx";
 import { authService } from "../../api/services.js";
 
 export default function Login() {
-  const { login, loginWithEmailOtp } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const [role, setRole] = useState("student");
-  const [authMethod, setAuthMethod] = useState("password"); // "password", "email_otp"
 
   // Test users modal state
   const [isTestModalOpen, setIsTestModalOpen] = useState(false);
@@ -24,13 +23,6 @@ export default function Login() {
   // Password state
   const [form, setForm] = useState({ email: "", password: "", remember_me: false });
   const [showPassword, setShowPassword] = useState(false);
-
-  // Email OTP state
-  const [otpEmail, setOtpEmail] = useState("");
-  const [emailOtp, setEmailOtp] = useState("");
-  const [emailOtpSent, setEmailOtpSent] = useState(false);
-  const [emailSubmitting, setEmailSubmitting] = useState(false);
-  const [emailSendingOtp, setEmailSendingOtp] = useState(false);
 
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -87,6 +79,10 @@ export default function Login() {
       const dest = location.state?.from || getDashboardDestination(user.role);
       navigate(dest, { replace: true });
     } catch (err) {
+      if (!err.response) {
+        toast.error(err.message || "Login failed. Please try again.");
+        return;
+      }
       const msg = getAuthErrorMessage(err);
       toast.error(msg);
       if (err.response?.data?.detail === "Please verify your email first") {
@@ -125,58 +121,6 @@ export default function Login() {
     }
   };
 
-  // Send Email OTP
-  const handleSendEmailOtp = async () => {
-    const clean = otpEmail.trim().toLowerCase();
-    if (!/^\S+@\S+\.\S+$/.test(clean)) {
-      toast.error("Please enter a valid email address.");
-      return;
-    }
-    setEmailSendingOtp(true);
-    try {
-      await authService.sendEmailLoginOtp({ email: clean, role });
-      setEmailOtpSent(true);
-      toast.success(`Login OTP sent to ${clean}`);
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "Could not send OTP to this email.");
-    } finally {
-      setEmailSendingOtp(false);
-    }
-  };
-
-  // Verify Email OTP & Login
-  const handleVerifyEmailOtp = async (e, codeToVerify = null) => {
-    if (e) e.preventDefault();
-    const finalOtp = codeToVerify || emailOtp;
-    if (finalOtp.trim().length !== 6) {
-      toast.error("Please enter the complete 6-digit OTP");
-      return;
-    }
-    setEmailSubmitting(true);
-    try {
-      const user = await loginWithEmailOtp({
-        email: otpEmail.trim().toLowerCase(),
-        otp_code: finalOtp.trim(),
-        role,
-        remember_me: form.remember_me,
-      });
-      toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
-      const dest =
-        location.state?.from ||
-        (user.role === "admin"
-          ? "/admin/dashboard"
-          : user.role === "faculty"
-          ? "/faculty/dashboard"
-          : user.role === "volunteer"
-          ? "/volunteer/dashboard"
-          : "/student/dashboard");
-      navigate(dest, { replace: true });
-    } catch (err) {
-      toast.error(err.response?.data?.detail || "Invalid or expired OTP code.");
-    } finally {
-      setEmailSubmitting(false);
-    }
-  };
 
   const inputIconStyle = {
     position: "absolute",
@@ -255,7 +199,36 @@ export default function Login() {
             zIndex: 2,
           }}
         >
-          {/* Header */}
+          {/* Back button */}
+        <button
+          type="button"
+          onClick={() => {
+            if (window.history.length > 1) navigate(-1);
+            else navigate("/");
+          }}
+          aria-label="Go back"
+          title="Go back"
+          style={{
+            position: "absolute",
+            top: 18,
+            left: 18,
+            width: 38,
+            height: 38,
+            borderRadius: 11,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--bg-glass)",
+            border: "1px solid var(--border-color)",
+            color: "var(--text-secondary)",
+            cursor: "pointer",
+            zIndex: 3,
+          }}
+        >
+          <FiArrowLeft size={17} />
+        </button>
+
+        {/* Header */}
           <div style={{ textAlign: "center", marginBottom: 20 }}>
             <Link
               to="/"
@@ -332,66 +305,28 @@ export default function Login() {
             ))}
           </div>
 
-          {/* Auth Method Tabs: Password vs Email OTP */}
+          {/* Firebase Authentication */}
           <div
             style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(2, 1fr)",
-              gap: 6,
-              background: "var(--bg-glass)",
-              padding: 4,
-              borderRadius: 12,
-              marginBottom: 20,
-              border: "1px solid var(--border-color)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              padding: "9px 12px",
+              marginBottom: 18,
+              borderRadius: 10,
+              background: "rgba(139, 92, 246, 0.08)",
+              border: "1px solid rgba(139, 92, 246, 0.22)",
+              color: "var(--text-secondary)",
+              fontSize: 12.5,
             }}
           >
-            <button
-              type="button"
-              onClick={() => setAuthMethod("password")}
-              style={{
-                background: authMethod === "password" ? "var(--bg-elevated)" : "transparent",
-                color: authMethod === "password" ? "#8b5cf6" : "var(--text-secondary)",
-                border: authMethod === "password" ? "1px solid rgba(139, 92, 246, 0.4)" : "none",
-                borderRadius: 8,
-                padding: "8px 4px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 6,
-                transition: "all 0.2s ease",
-              }}
-            >
-              <FiLock size={14} /> Password
-            </button>
-            <button
-              type="button"
-              onClick={() => setAuthMethod("email_otp")}
-              style={{
-                background: authMethod === "email_otp" ? "var(--bg-elevated)" : "transparent",
-                color: authMethod === "email_otp" ? "#8b5cf6" : "var(--text-secondary)",
-                border: authMethod === "email_otp" ? "1px solid rgba(139, 92, 246, 0.4)" : "none",
-                borderRadius: 8,
-                padding: "8px 4px",
-                fontSize: 13,
-                fontWeight: 600,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 6,
-                transition: "all 0.2s ease",
-              }}
-            >
-              <FiMail size={14} /> Email OTP
-            </button>
+            <FiCheckCircle size={14} style={{ color: "#8b5cf6" }} />
+            Email and password are secured by Firebase Authentication
           </div>
 
           {/* METHOD 1: PASSWORD LOGIN */}
-          {authMethod === "password" && (
-            <form onSubmit={handlePasswordSubmit}>
+          <form onSubmit={handlePasswordSubmit}>
               <div className="form-group">
                 <label className="form-label">Email Address</label>
                 <div style={{ position: "relative" }}>
@@ -453,71 +388,7 @@ export default function Login() {
               <button className="btn btn-primary" style={{ width: "100%" }} disabled={submitting}>
                 {submitting ? "Logging in..." : "Login with Password"}
               </button>
-            </form>
-          )}
-
-          {/* METHOD 2: EMAIL OTP LOGIN */}
-          {authMethod === "email_otp" && (
-            <div>
-              <div className="form-group">
-                <label className="form-label">Email Address</label>
-                <div style={{ position: "relative" }}>
-                  <FiMail style={inputIconStyle} />
-                  <input
-                    className="form-input"
-                    style={{ paddingLeft: 40 }}
-                    type="email"
-                    value={otpEmail}
-                    onChange={(e) => setOtpEmail(e.target.value)}
-                    placeholder="you@college.edu"
-                    disabled={emailOtpSent}
-                  />
-                </div>
-              </div>
-
-              {!emailOtpSent ? (
-                <button
-                  type="button"
-                  onClick={handleSendEmailOtp}
-                  className="btn btn-primary"
-                  style={{ width: "100%", marginTop: 8 }}
-                  disabled={emailSendingOtp || !otpEmail.trim()}
-                >
-                  {emailSendingOtp ? "Sending OTP..." : "Send Email OTP"}
-                </button>
-              ) : (
-                <form onSubmit={handleVerifyEmailOtp}>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                      <label className="form-label" style={{ margin: 0 }}>Enter 6-Digit OTP</label>
-                      <button
-                        type="button"
-                        onClick={() => setEmailOtpSent(false)}
-                        style={{ background: "none", border: "none", color: "#8b5cf6", fontSize: 12, cursor: "pointer", fontWeight: 600 }}
-                      >
-                        Change Email
-                      </button>
-                    </div>
-                    <OTPInput
-                      value={emailOtp}
-                      onChange={setEmailOtp}
-                      onComplete={(code) => handleVerifyEmailOtp(null, code)}
-                      onResend={handleSendEmailOtp}
-                      resending={emailSendingOtp}
-                      disabled={emailSubmitting}
-                    />
-                  </div>
-                  <button
-                    className="btn btn-primary"
-                    style={{ width: "100%", marginTop: 12 }}
-                    disabled={emailSubmitting || emailOtp.length !== 6}
-                  >
-                    {emailSubmitting ? "Verifying..." : "Verify & Login"}
-                  </button>
-                </form>
-              )}
-            </div>
-          )}
+          </form>
 
           {/* Footer link to Register */}
           <div style={{ textAlign: "center", marginTop: 22, fontSize: 13.5, color: "var(--text-secondary)" }}>

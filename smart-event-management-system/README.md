@@ -154,3 +154,63 @@ python migrate_mysql_to_firestore.py --mysql-url="mysql+pymysql://root:password@
 - **Role-Based Access Control**: `student`, `faculty`, and `admin` roles are strictly enforced at the FastAPI dependency layer.
 - **Atomic Operations**: Event registrations and seat counters use Firestore atomic transactions to prevent overbooking and race conditions.
 - **Certificates**: Access-controlled by student `registration_number`.
+
+
+---
+
+## 9. Demo / Test Users
+
+The backend contains idempotent demo accounts for testing all four roles. They are created only when `SEED_TEST_USERS=true`.
+
+| Role | Email | Password |
+|---|---|---|
+| Student | student@test.com | Student@123 |
+| Faculty | faculty@test.com | Faculty@123 |
+| Volunteer | volunteer@test.com | Volunteer@123 |
+| Admin | admin@test.com | Admin@123 |
+
+These are demo credentials only. Change or remove them before exposing a production system to real users.
+
+For Render, `render.yaml` enables `SEED_TEST_USERS=true` so the demo accounts are available after deployment.
+
+## 10. Production Deployment Notes
+
+### Frontend (Vercel or Render Static Site)
+Set:
+
+```env
+VITE_API_URL=https://<your-render-backend>.onrender.com
+```
+
+### Backend (Render)
+Set the production values in Render Environment Variables:
+
+```env
+APP_ENV=production
+DEBUG=False
+FRONTEND_URL=https://<your-frontend-domain>
+CORS_ORIGINS=https://<your-frontend-domain>
+FIREBASE_PROJECT_ID=<your-project>
+FIREBASE_CLIENT_EMAIL=<your-service-account-email>
+FIREBASE_PRIVATE_KEY=<your-private-key>
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=<your-gmail-address>
+SMTP_PASSWORD=<your-gmail-app-password>
+SMTP_FROM_EMAIL=<your-gmail-address>
+```
+
+Never commit `.env`, Firebase service-account JSON, private keys, API keys, SMTP passwords, or JWT secrets.
+
+### OTP Production Flow
+
+Registration and password-reset OTPs are generated on the backend and sent through the configured SMTP server. The OTP is not returned to the frontend. Login also supports email OTP through the backend.
+
+A deployment smoke check is available at:
+
+```
+GET /api/health
+GET /api/health/email
+```
+
+`/api/health/email` reports only whether SMTP is configured; it never exposes credentials.

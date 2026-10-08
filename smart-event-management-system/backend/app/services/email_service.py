@@ -8,6 +8,7 @@ Configured via environment variables:
 """
 import logging
 import smtplib
+import requests
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
@@ -18,6 +19,65 @@ import requests
 from app.core.config import settings
 
 logger = logging.getLogger("app.email")
+
+
+def _send_via_resend(
+    to_email: str,
+    subject: str,
+    html_body: str,
+    text_body: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Send email through Resend's HTTPS API (works on Render Free)."""
+    api_key = (settings.RESEND_API_KEY or "").strip()
+    from_email = (settings.RESEND_FROM_EMAIL or "").strip()
+
+    if not api_key or not from_email:
+        logger.error("Resend is selected but RESEND_API_KEY/RESEND_FROM_EMAIL is missing.")
+        return False, "Resend email service is not configured."
+
+    try:
+        payload = {
+            "from": from_email,
+            "to": [to_email],
+            "subject": subject,
+            "html": html_body,
+        }
+        if text_body:
+            payload["text"] = text_body
+
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=15,
+        )
+
+        if 200 <= response.status_code < 300:
+            try:
+                message_id = response.json().get("id")
+            except Exception:
+                message_id = None
+            logger.info(
+                "Resend email accepted for %s (message_id=%s)",
+                _mask_email(to_email),
+                message_id or "unknown",
+            )
+            return True, "Email delivered successfully"
+
+        logger.error(
+            "Resend delivery failed for %s: HTTP %s %s",
+            _mask_email(to_email),
+            response.status_code,
+            response.text[:300],
+        )
+        return False, "Unable to send verification email. Please check the email service configuration."
+
+    except Exception as e:
+        logger.error("Resend network exception for %s: %s", _mask_email(to_email), str(e))
+        return False, "Unable to send verification email. Please check the email service configuration."
 
 
 def _mask_email(email: str) -> str:

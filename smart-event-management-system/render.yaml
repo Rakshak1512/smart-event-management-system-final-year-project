@@ -2,12 +2,15 @@ services:
   - type: web
     name: eventsphere-backend
     runtime: python
-    rootDir: backend
+    autoDeploy: true
+    rootDir: smart-event-management-system/backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: APP_ENV
         value: production
+      - key: PYTHON_VERSION
+        value: "3.12.10"
       - key: DEBUG
         value: "False"
       - key: PORT
@@ -40,6 +43,14 @@ services:
         sync: false
       - key: SMTP_FROM_NAME
         value: EventSphere
+      - key: EMAIL_PROVIDER
+        value: resend
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      - key: SEED_TEST_USERS
+        value: "true"
 
   - type: web
     name: eventsphere-frontend
@@ -53,4 +64,16 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_URL
+        sync: false
+      - key: VITE_FIREBASE_API_KEY
+        sync: false
+      - key: VITE_FIREBASE_AUTH_DOMAIN
+        sync: false
+      - key: VITE_FIREBASE_PROJECT_ID
+        value: eventsphere-1243c
+      - key: VITE_FIREBASE_STORAGE_BUCKET
+        sync: false
+      - key: VITE_FIREBASE_MESSAGING_SENDER_ID
+        sync: false
+      - key: VITE_FIREBASE_APP_ID
         sync: false

@@ -81,8 +81,8 @@ export default function Register() {
       };
 
       await register(payload);
-      toast.success("Account created! Check your email for the 6-digit verification code.");
-      navigate("/verify-email", { state: { email: form.email } });
+      toast.success("Account created! Check your email for a Firebase verification link.");
+      navigate("/verify-email", { state: { email: form.email, role: form.role } });
     } catch (err) {
       const detail = err.response?.data?.detail;
       let msg = "Registration failed. Please check your details.";

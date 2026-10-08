@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_USE_TLS: bool = True
 
+    # HTTPS email provider (recommended for Render Free)
+    EMAIL_PROVIDER: str = "auto"  # auto | resend | smtp
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = ""
+
     # OTP
     OTP_EXPIRE_MINUTES: int = 10
     OTP_LENGTH: int = 6
@@ -70,6 +75,9 @@ class Settings(BaseSettings):
 
     # Rate limiting
     RATE_LIMIT_PER_MINUTE: int = 60
+
+    # Demo/test accounts. Keep enabled only when demo accounts are desired.
+    SEED_TEST_USERS: bool = False
 
     @property
     def upload_dir_abs(self) -> str:

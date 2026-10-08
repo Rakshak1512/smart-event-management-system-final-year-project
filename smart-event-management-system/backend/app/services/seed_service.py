@@ -1,4 +1,5 @@
 import logging
+from firebase_admin import auth
 from app.core.security import hash_password, verify_password
 from app.db import firestore_service as db_service
 from app.models.user import RoleEnum
@@ -41,6 +42,37 @@ TEST_USERS = [
         "admin_id": "ADM-001",
     },
 ]
+
+
+TEST_USER_NAME_MAP = {item["email"].strip().lower(): item["name"] for item in TEST_USERS}
+
+
+def _sync_firebase_user(email: str, password: str) -> None:
+    """Create/update demo credentials in Firebase Authentication."""
+    try:
+        existing = None
+        try:
+            existing = auth.get_user_by_email(email)
+        except auth.UserNotFoundError:
+            existing = None
+
+        if existing:
+            auth.update_user(
+                existing.uid,
+                password=password,
+                email_verified=True,
+                display_name=TEST_USER_NAME_MAP.get(email, existing.display_name),
+            )
+        else:
+            auth.create_user(
+                email=email,
+                password=password,
+                email_verified=True,
+                display_name=TEST_USER_NAME_MAP.get(email),
+            )
+        logger.info("Firebase demo user synchronized: %s", email)
+    except Exception as e:
+        logger.error("Failed to sync Firebase demo user %s: %s", email, e)
 
 
 def seed_test_users():
@@ -93,5 +125,6 @@ def seed_test_users():
                 if updates:
                     db_service.update_user(existing.id, updates)
                     logger.info("Demo user synchronized: %s (%s)", clean_email, role.value)
+            _sync_firebase_user(clean_email, item["password"])
         except Exception as e:
             logger.error("Failed to seed demo user %s: %s", clean_email, e)
