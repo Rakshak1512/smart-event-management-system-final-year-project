@@ -224,12 +224,22 @@ export const resultService = {
 /* ---------------- Admin & Principal Services ---------------- */
 export const adminService = {
   facultyList: () => api.get("/admin/faculty"),
+  pendingFaculty: () => api.get("/admin/pending-faculty"),
+  approveFaculty: (facultyId) => api.post(`/admin/faculty/${facultyId}/approve`),
+  rejectFaculty: (facultyId, reason) => api.post(`/admin/faculty/${facultyId}/reject`, { reason }),
   assignments: () => api.get("/admin/assignments"),
   facultyAssignments: (facultyId) => api.get(`/admin/assignments/faculty/${facultyId}`),
   createAssignment: (payload) => api.post("/admin/assignments", payload),
   updateAssignment: (id, payload) => api.put(`/admin/assignments/${id}`, payload),
   deleteAssignment: (id) => api.delete(`/admin/assignments/${id}`),
   reportsSummary: () => api.get("/admin/reports/summary"),
+};
+
+/* ---------------- Faculty Approval Services ---------------- */
+export const facultyApprovalService = {
+  pendingStudents: () => api.get("/faculty/pending-students"),
+  approveStudent: (studentId) => api.post(`/faculty/students/${studentId}/approve`),
+  rejectStudent: (studentId, reason) => api.post(`/faculty/students/${studentId}/reject`, { reason }),
 };
 
 /* ---------------- Faculty Task Services ---------------- */

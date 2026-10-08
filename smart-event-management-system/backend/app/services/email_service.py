@@ -1,14 +1,10 @@
 """
-SMTP Email Service for transactional emails via Gmail / Standard SMTP.
+Email Service for transactional emails via Resend HTTP API and SMTP.
 
 Configured via environment variables:
-- SMTP_HOST
-- SMTP_PORT
-- SMTP_USER
-- SMTP_PASSWORD
-- SMTP_FROM_NAME
-- SMTP_FROM_EMAIL
-- SMTP_USE_TLS
+- RESEND_API_KEY (Recommended for cloud/production)
+- RESEND_FROM_EMAIL
+- SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_FROM_NAME, SMTP_FROM_EMAIL, SMTP_USE_TLS
 """
 import logging
 import smtplib
@@ -16,6 +12,8 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr
 from typing import Optional, Tuple
+
+import requests
 
 from app.core.config import settings
 
@@ -34,37 +32,67 @@ def _mask_email(email: str) -> str:
     return f"{masked_local}@{domain}"
 
 
-def send_email_detailed(
-    to_email: str, subject: str, html_body: str, text_body: Optional[str] = None
+def _send_via_resend(
+    to_addr: str, subject: str, html_body: str, text_body: Optional[str] = None
 ) -> Tuple[bool, str]:
-    """
-    Send an email via SMTP and return (success, message_or_error_detail).
-    
-    Safe logging:
-    - Never logs SMTP passwords or sensitive credentials.
-    - Masks recipient email addresses in logs.
-    """
-    to_addr = (to_email or "").strip()
-    if not to_addr:
-        return False, "Recipient email address is required."
+    """Send an email using Resend REST API."""
+    api_key = (settings.RESEND_API_KEY or "").strip()
+    if not api_key:
+        return False, "RESEND_API_KEY not configured"
 
     masked_to = _mask_email(to_addr)
+    from_name = (settings.SMTP_FROM_NAME or settings.APP_NAME or "EventSphere").strip()
+    from_email = (settings.RESEND_FROM_EMAIL or settings.SMTP_FROM_EMAIL or "onboarding@resend.dev").strip()
+    sender = f"{from_name} <{from_email}>"
 
+    logger.info("[EMAIL] [RESEND] Initiating dispatch to %s via Resend (Sender: %s)", masked_to, from_email)
+
+    payload = {
+        "from": sender,
+        "to": [to_addr],
+        "subject": subject,
+        "html": html_body,
+    }
+    if text_body:
+        payload["text"] = text_body
+
+    try:
+        response = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=12,
+        )
+        if response.status_code in (200, 201):
+            logger.info("[EMAIL] [RESEND] Successfully delivered email to %s", masked_to)
+            return True, "Email delivered successfully via Resend"
+        err_msg = response.text[:200]
+        logger.error("[EMAIL] [RESEND] API error (Status %s) for %s: %s", response.status_code, masked_to, err_msg)
+        return False, f"Resend API error: {err_msg}"
+    except Exception as e:
+        logger.error("[EMAIL] [RESEND] Connection failed for %s: %s", masked_to, str(e))
+        return False, f"Resend network error: {str(e)}"
+
+
+def _send_via_smtp(
+    to_addr: str, subject: str, html_body: str, text_body: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Send an email using standard SMTP."""
+    masked_to = _mask_email(to_addr)
     host = settings.SMTP_HOST.strip() if settings.SMTP_HOST else "smtp.gmail.com"
     port = settings.SMTP_PORT or 587
     user = settings.SMTP_USER.strip() if settings.SMTP_USER else ""
-    # Strip any internal spaces from 16-character Google App Passwords
     password = (settings.SMTP_PASSWORD or "").strip().replace(" ", "")
     from_name = (settings.SMTP_FROM_NAME or settings.APP_NAME or "EventSphere").strip()
     from_email = (settings.SMTP_FROM_EMAIL or user or "smart.event.system2026@gmail.com").strip()
 
     if not host or not user or not password:
-        err_msg = "SMTP credentials not configured (SMTP_HOST, SMTP_USER, or SMTP_PASSWORD is empty)."
-        logger.error("SMTP delivery failed: %s (To=%s)", err_msg, masked_to)
-        return False, "Unable to send verification email. Please check the email service configuration."
+        return False, "SMTP credentials incomplete (host/user/password empty)."
 
     sender_header = formataddr((from_name, from_email))
-
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = sender_header
@@ -75,15 +103,15 @@ def send_email_detailed(
     if html_body:
         msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-    logger.info("SMTP request started for %s (Subject: %s, Sender: %s)", masked_to, subject, from_email)
+    logger.info("[EMAIL] [SMTP] Connecting to %s:%s for %s", host, port, masked_to)
 
     try:
         if port == 465:
-            with smtplib.SMTP_SSL(host, port, timeout=15) as server:
+            with smtplib.SMTP_SSL(host, port, timeout=12) as server:
                 server.login(user, password)
                 server.sendmail(from_email, [to_addr], msg.as_string())
         else:
-            with smtplib.SMTP(host, port, timeout=15) as server:
+            with smtplib.SMTP(host, port, timeout=12) as server:
                 server.ehlo()
                 if settings.SMTP_USE_TLS:
                     server.starttls()
@@ -91,17 +119,61 @@ def send_email_detailed(
                 server.login(user, password)
                 server.sendmail(from_email, [to_addr], msg.as_string())
 
-        logger.info("SMTP email sent successfully to %s", masked_to)
-        return True, "Email delivered successfully"
+        logger.info("[EMAIL] [SMTP] Email delivered successfully to %s", masked_to)
+        return True, "Email delivered successfully via SMTP"
     except smtplib.SMTPAuthenticationError as e:
-        logger.error("SMTP authentication failed for %s: (Code: %s)", masked_to, getattr(e, 'smtp_code', 535))
-        return False, "Unable to send verification email. Please check the email service configuration."
-    except smtplib.SMTPException as e:
-        logger.error("SMTP error for %s: %s", masked_to, str(e))
-        return False, "Unable to send verification email. Please check the email service configuration."
+        logger.error("[EMAIL] [SMTP] Authentication failed for %s (code %s)", masked_to, getattr(e, "smtp_code", 535))
+        return False, "SMTP authentication failed. Please verify credentials."
     except Exception as e:
-        logger.error("SMTP network exception for %s: %s", masked_to, str(e))
-        return False, "Unable to send verification email. Please check the email service configuration."
+        logger.error("[EMAIL] [SMTP] Error for %s: %s", masked_to, str(e))
+        return False, f"SMTP delivery failed: {str(e)}"
+
+
+def send_email_detailed(
+    to_email: str, subject: str, html_body: str, text_body: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Primary email dispatch function.
+    Automatically prioritizes Resend (if configured) then SMTP, with safe logging.
+    In development/debug environments, gracefully falls back without blocking auth flows.
+    """
+    to_addr = (to_email or "").strip()
+    if not to_addr:
+        return False, "Recipient email address is required."
+
+    masked_to = _mask_email(to_addr)
+    has_resend = bool((settings.RESEND_API_KEY or "").strip())
+    has_smtp = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
+
+    # 1. Try Resend if configured
+    if has_resend:
+        ok, detail = _send_via_resend(to_addr, subject, html_body, text_body)
+        if ok:
+            return True, detail
+        logger.warning("[EMAIL] Resend delivery failed for %s, falling back to SMTP if available: %s", masked_to, detail)
+
+    # 2. Try SMTP if configured
+    if has_smtp:
+        ok, detail = _send_via_smtp(to_addr, subject, html_body, text_body)
+        if ok:
+            return True, detail
+        logger.warning("[EMAIL] SMTP delivery failed for %s: %s", masked_to, detail)
+
+    # 3. Development / Localhost Fallback
+    # In development mode, allow user flows to proceed so engineers/testers are never locked out
+    if settings.APP_ENV != "production" or settings.DEBUG:
+        logger.info(
+            "[EMAIL] [DEV_FALLBACK] Email delivery to %s simulated (Subject: %s). Running in %s mode.",
+            masked_to,
+            subject,
+            settings.APP_ENV,
+        )
+        return True, "Email delivery recorded (development mode)"
+
+    err_msg = "Email service is temporarily unavailable. Please contact support."
+    logger.error("[EMAIL] [DISPATCH_FAILED] No active email delivery succeeded for %s", masked_to)
+    return False, err_msg
+
 
 
 def send_email(to_email: str, subject: str, html_body: str, text_body: Optional[str] = None) -> bool:
@@ -546,5 +618,157 @@ def send_faculty_work_assigned_email(
 </html>"""
     text = f"Dear Prof. {faculty_name},\n\nYou have been assigned a new task: {task_title}\n\nDescription: {description}\nPriority: {priority}\nDeadline: {deadline_str}\nAssigned by: {assigned_by_name}\n\nView on Portal: {link}"
     return send_email(to_email, subject, html, text)
+
+
+def send_account_pending_approval_email(to_email: str, name: str, role: str) -> bool:
+    """Send alert that account is verified and waiting for institutional approval."""
+    role_str = str(role).capitalize()
+    approver = "Faculty Coordinator" if role == "student" else "System Administrator"
+    subject = f"EventSphere Account Created — Pending {approver} Approval"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #38bdf8; margin-top: 0;">⏳ Account Awaiting Approval</h2>
+    <p style="color: #cbd5e1; font-size: 15px;">Hello <strong>{name}</strong>,</p>
+    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
+      Your email has been successfully verified! Your <strong>{role_str}</strong> account registration is currently waiting for approval by your <strong>{approver}</strong>.
+    </p>
+    <div style="background: #0f172a; padding: 14px; border-radius: 10px; margin: 18px 0; border: 1px solid #334155;">
+      <p style="margin: 0; font-size: 13px; color: #cbd5e1;">Status: <strong style="color: #fbbf24;">Pending Approval</strong></p>
+    </div>
+    <p style="color: #64748b; font-size: 12px; margin: 0;">You will receive an email as soon as your account is approved.</p>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere account is awaiting {approver} approval.")
+
+
+def send_student_approved_email(to_email: str, name: str) -> bool:
+    """Send student account approval notification email."""
+    subject = "🎉 EventSphere Account Approved! Welcome to Student Portal"
+    portal_url = f"{settings.FRONTEND_URL}/student/dashboard"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #10b981; margin-top: 0;">🎉 Account Approved!</h2>
+    <p style="color: #cbd5e1; font-size: 15px;">Hello <strong>{name}</strong>,</p>
+    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
+      Great news! Your EventSphere student account has been approved by the faculty coordinators. Your student dashboard, event registration, and digital QR passes are now fully active.
+    </p>
+    <div style="margin: 24px 0;">
+      <a href="{portal_url}" style="background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 600; display: inline-block;">
+        Open Student Dashboard
+      </a>
+    </div>
+    <p style="color: #64748b; font-size: 12px; margin: 0;">Welcome to EventSphere Smart Event Management.</p>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Hello {name}, your EventSphere student account has been approved! Visit {portal_url}")
+
+
+def send_student_rejected_email(to_email: str, name: str, reason: Optional[str] = None) -> bool:
+    """Send student account rejection notification email."""
+    subject = "EventSphere Account Registration Update"
+    reason_txt = reason or "Verification details could not be validated with institutional records."
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #ef4444; margin-top: 0;">Registration Update</h2>
+    <p style="color: #cbd5e1; font-size: 15px;">Hello <strong>{name}</strong>,</p>
+    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
+      Your student account application for EventSphere was reviewed and could not be approved at this time.
+    </p>
+    <div style="background: #0f172a; padding: 14px; border-radius: 10px; margin: 18px 0; border: 1px solid #334155; text-align: left;">
+      <p style="margin: 0; font-size: 13px; color: #ef4444;"><strong>Reason:</strong> {reason_txt}</p>
+    </div>
+    <p style="color: #64748b; font-size: 12px; margin: 0;">Please contact your department faculty coordinator if you believe this is in error.</p>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Hello {name}, your registration could not be approved: {reason_txt}")
+
+
+def send_faculty_approved_email(to_email: str, name: str) -> bool:
+    """Send faculty account approval notification email."""
+    subject = "🎉 EventSphere Faculty Portal Approved"
+    portal_url = f"{settings.FRONTEND_URL}/faculty/dashboard"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #6366f1; margin-top: 0;">🎉 Faculty Account Approved</h2>
+    <p style="color: #cbd5e1; font-size: 15px;">Dear <strong>Prof. {name}</strong>,</p>
+    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
+      Your EventSphere Faculty account has been verified and approved by the System Administrator. You can now create campus events, manage student registrations, and view analytics.
+    </p>
+    <div style="margin: 24px 0;">
+      <a href="{portal_url}" style="background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%); color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 10px; font-weight: 600; display: inline-block;">
+        Access Faculty Dashboard
+      </a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Dear Prof. {name}, your faculty account has been approved! Visit {portal_url}")
+
+
+def send_faculty_rejected_email(to_email: str, name: str, reason: Optional[str] = None) -> bool:
+    """Send faculty account rejection notification email."""
+    subject = "EventSphere Faculty Account Update"
+    reason_txt = reason or "Faculty credentials could not be verified by system administrators."
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 500px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px; text-align: center;">
+    <h2 style="color: #ef4444; margin-top: 0;">Faculty Registration Update</h2>
+    <p style="color: #cbd5e1; font-size: 15px;">Dear <strong>Prof. {name}</strong>,</p>
+    <p style="color: #94a3b8; font-size: 14px; line-height: 1.55;">
+      Your application for a Faculty coordinator account was reviewed and could not be approved at this time.
+    </p>
+    <div style="background: #0f172a; padding: 14px; border-radius: 10px; margin: 18px 0; border: 1px solid #334155; text-align: left;">
+      <p style="margin: 0; font-size: 13px; color: #ef4444;"><strong>Reason:</strong> {reason_txt}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(to_email, subject, html, f"Dear Prof. {name}, your registration could not be approved: {reason_txt}")
+
+
+def send_admin_new_faculty_alert_email(admin_email: str, faculty_name: str, faculty_email: str, department: Optional[str] = None) -> bool:
+    """Alert administrator of new faculty registration needing approval."""
+    subject = f"Action Required: New Faculty Registration ({faculty_name})"
+    admin_url = f"{settings.FRONTEND_URL}/admin/faculty"
+    dept_str = department or "Not Specified"
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>{subject}</title></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #0f172a; margin: 0; padding: 24px 16px; color: #f8fafc;">
+  <div style="max-width: 520px; margin: 0 auto; background: #1e293b; border-radius: 16px; border: 1px solid #334155; padding: 28px 24px;">
+    <h2 style="color: #fbbf24; margin-top: 0; text-align: center;">⚠️ Faculty Approval Required</h2>
+    <p style="color: #cbd5e1; font-size: 14px;">A new faculty member has verified their email and is awaiting admin approval:</p>
+    <div style="background: #0f172a; padding: 16px; border-radius: 10px; border: 1px solid #334155; font-size: 13.5px; margin: 16px 0;">
+      <p style="margin: 4px 0; color: #cbd5e1;"><strong>Name:</strong> {faculty_name}</p>
+      <p style="margin: 4px 0; color: #cbd5e1;"><strong>Email:</strong> {faculty_email}</p>
+      <p style="margin: 4px 0; color: #cbd5e1;"><strong>Department:</strong> {dept_str}</p>
+    </div>
+    <div style="text-align: center; margin-top: 20px;">
+      <a href="{admin_url}" style="background: #3b82f6; color: #ffffff; text-decoration: none; padding: 11px 24px; border-radius: 8px; font-weight: 600; display: inline-block;">
+        Review & Approve in Admin Portal
+      </a>
+    </div>
+  </div>
+</body>
+</html>"""
+    return send_email(admin_email, subject, html, f"New Faculty awaiting approval: {faculty_name} ({faculty_email})")
+
 
 

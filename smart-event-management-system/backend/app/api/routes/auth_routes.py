@@ -31,6 +31,8 @@ from app.schemas.user_schema import (
 )
 from app.services.email_service import (
     _mask_email,
+    send_account_pending_approval_email,
+    send_admin_new_faculty_alert_email,
     send_otp_email,
     send_password_reset_email,
     send_verification_email,
@@ -77,7 +79,7 @@ def register(payload: UserCreate, request: Request):
 
     try:
         otp = generate_otp()
-        logger.info("OTP generation succeeded for %s", _mask_email(clean_email))
+        logger.info("[AUTH] [OTP] OTP generated for %s (Expires in %d min)", _mask_email(clean_email), settings.OTP_EXPIRE_MINUTES)
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
 
         pending_data = {
@@ -94,15 +96,19 @@ def register(payload: UserCreate, request: Request):
             "created_at": datetime.now(timezone.utc),
         }
         db_service.save_pending_registration(pending_data)
+        logger.info("[AUTH] [FIREBASE] Pending registration saved for %s", _mask_email(clean_email))
 
-        # Dispatch OTP via SMTP Email
+        # Dispatch OTP via Resend or SMTP Email
         email_sent, email_msg = send_otp_email(clean_email, otp, payload.name.strip(), settings.OTP_EXPIRE_MINUTES)
         if not email_sent:
-            db_service.delete_pending_registration(clean_email)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to deliver verification email: {email_msg}",
-            )
+            if settings.APP_ENV != "production" or settings.DEBUG:
+                logger.warning("[AUTH] [EMAIL] Dev mode: proceeding with pending registration for %s despite delivery issue: %s", _mask_email(clean_email), email_msg)
+            else:
+                db_service.delete_pending_registration(clean_email)
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to deliver verification email: {email_msg}",
+                )
 
         # Return unverified placeholder UserOut object
         return UserOut(
@@ -147,6 +153,18 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
                 logger.warning("OTP verification failed (expired OTP) for %s", _mask_email(clean_email))
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This OTP has expired. Please request a new OTP.")
 
+        # Determine approval status: students require faculty approval; faculty require admin approval
+        p_role = str(pending.get("role", "")).lower()
+        if p_role == "student":
+            appr_status = "PENDING_FACULTY_APPROVAL"
+            is_active_flag = False
+        elif p_role == "faculty":
+            appr_status = "PENDING_ADMIN_APPROVAL"
+            is_active_flag = False
+        else:
+            appr_status = "ACTIVE"
+            is_active_flag = True
+
         # Create user in permanent users table now that email is verified
         created_user = db_service.create_user(
             name=pending["name"],
@@ -159,12 +177,24 @@ def verify_email(payload: VerifyEmailRequest, request: Request):
             department=pending.get("department"),
             semester=pending.get("semester"),
             is_email_verified=True,
-            is_active=True,
+            is_active=is_active_flag,
+            approval_status=appr_status,
         )
 
         db_service.delete_pending_registration(clean_email)
-        logger.info("OTP verification successful for %s (User ID: %s)", _mask_email(clean_email), created_user.id)
+        logger.info("[AUTH] [APPROVAL] User %s created with status %s (ID: %s)", _mask_email(clean_email), appr_status, created_user.id)
         _log(created_user.id, "verify_email", request)
+
+        # Dispatch async approval notification emails
+        if p_role in ("student", "faculty"):
+            try:
+                send_account_pending_approval_email(created_user.email, created_user.name, p_role)
+                if p_role == "faculty":
+                    admin_recipient = getattr(settings, "ADMIN_EMAIL", "admin@test.com")
+                    send_admin_new_faculty_alert_email(admin_recipient, created_user.name, created_user.email, created_user.department)
+            except Exception as mail_err:
+                logger.error("[EMAIL ERROR] Exception sending pending approval email for %s: %s", _mask_email(clean_email), mail_err)
+
         return created_user
 
     # 2. Legacy fallback for users created prior to pending table
@@ -276,7 +306,7 @@ def resend_verification_otp(payload: ResendOtpRequest):
     pending = db_service.get_pending_registration(clean_email)
     if pending:
         otp = generate_otp()
-        logger.info("New OTP generated for resend to %s", _mask_email(clean_email))
+        logger.info("[AUTH] [OTP] New OTP generated for resend to %s", _mask_email(clean_email))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
         pending["otp_code"] = otp
         pending["expires_at"] = expires_at
@@ -284,25 +314,31 @@ def resend_verification_otp(payload: ResendOtpRequest):
 
         email_sent, email_msg = send_otp_email(clean_email, otp, pending.get("name", "User"), settings.OTP_EXPIRE_MINUTES)
         if not email_sent:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to resend verification email: {email_msg}",
-            )
+            if settings.APP_ENV != "production" or settings.DEBUG:
+                logger.warning("[AUTH] [EMAIL] Dev mode: resend simulated for %s: %s", _mask_email(clean_email), email_msg)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to resend verification email: {email_msg}",
+                )
         return {"message": "Verification OTP resent successfully"}
 
     # 3. Fallback for legacy unverified user
     if existing and not existing.is_email_verified:
         otp = generate_otp()
-        logger.info("New OTP generated for resend to legacy user %s", _mask_email(clean_email))
+        logger.info("[AUTH] [OTP] New OTP generated for resend to legacy user %s", _mask_email(clean_email))
         expires_at = datetime.now(timezone.utc) + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
         db_service.create_email_verification(existing.id, otp, expires_at)
 
         email_sent, email_msg = send_otp_email(existing.email, otp, existing.name, settings.OTP_EXPIRE_MINUTES)
         if not email_sent:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Failed to resend verification email: {email_msg}",
-            )
+            if settings.APP_ENV != "production" or settings.DEBUG:
+                logger.warning("[AUTH] [EMAIL] Dev mode: resend simulated for %s: %s", _mask_email(clean_email), email_msg)
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"Failed to resend verification email: {email_msg}",
+                )
         return {"message": "Verification OTP resent successfully"}
 
     raise HTTPException(
@@ -323,17 +359,28 @@ def login(payload: UserLogin, request: Request):
 
     user_role_str = (user.role.value if hasattr(user.role, "value") else str(user.role)).lower().strip()
     if user_role_str != role_str.lower().strip():
-        _log(user.id, "login_role_mismatch", request)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your account does not have permission for this role.",
-        )
-
-    if not user.is_active:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Your account is currently inactive.")
+        if user_role_str == "student" and role_str.lower().strip() in ["admin", "faculty"]:
+            _log(user.id, "login_role_mismatch", request)
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account does not have permission for this role.",
+            )
 
     if not user.is_email_verified:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Please verify your email first")
+
+    appr_st = getattr(user, "approval_status", "ACTIVE") or "ACTIVE"
+    if not user.is_active:
+        if appr_st == "REJECTED":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account application has been reviewed and rejected.",
+            )
+        elif appr_st not in ("PENDING_FACULTY_APPROVAL", "PENDING_ADMIN_APPROVAL"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account is currently inactive.",
+            )
 
     access_expires = timedelta(days=30) if payload.remember_me else None
     role_val = user.role.value if hasattr(user.role, "value") else str(user.role)
@@ -357,7 +404,10 @@ def refresh_token(payload: TokenRefreshRequest):
 
     resolved_id = int(user_id) if str(user_id).isdigit() else str(user_id)
     user = db_service.get_user_by_id(resolved_id)
-    if not user or not user.is_active:
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    appr_st = getattr(user, "approval_status", "ACTIVE") or "ACTIVE"
+    if not user.is_active and appr_st not in ("PENDING_FACULTY_APPROVAL", "PENDING_ADMIN_APPROVAL"):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
 
     role_val = user.role.value if hasattr(user.role, "value") else str(user.role)

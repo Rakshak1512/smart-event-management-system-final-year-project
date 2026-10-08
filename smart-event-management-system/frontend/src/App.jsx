@@ -14,6 +14,7 @@ import Login from "./pages/auth/Login.jsx";
 import Register from "./pages/auth/Register.jsx";
 import VerifyEmail from "./pages/auth/VerifyEmail.jsx";
 import ForgotPassword from "./pages/auth/ForgotPassword.jsx";
+import AwaitingApproval from "./pages/auth/AwaitingApproval.jsx";
 
 // Dashboards and feature workspaces lazily loaded on demand
 const StudentDashboard = lazy(() => import("./pages/student/Dashboard.jsx"));
@@ -68,6 +69,7 @@ export default function App() {
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<Navigate to="/forgot-password" replace />} />
+        <Route path="/awaiting-approval" element={<AwaitingApproval />} />
 
         {/* Student routes (Analytics completely removed) */}
         <Route element={<ProtectedRoute allowedRoles={["student"]} />}>

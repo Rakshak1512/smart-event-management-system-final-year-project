@@ -25,7 +25,94 @@ from app.models.result import EventResult
 from app.models.team import Team, TeamMember, TeamStatus
 from app.models.user import RoleEnum, User
 
+import time
+from threading import Lock
+
 logger = logging.getLogger("app.firestore_service")
+
+
+# ============================================================
+# IN-MEMORY PERFORMANCE CACHE (Thread-safe TTL Layer)
+# ============================================================
+
+class TTLCache:
+    """Thread-safe in-memory cache with Time-To-Live (TTL) expiration."""
+    def __init__(self):
+        self._store = {}
+        self._lock = Lock()
+
+    def get(self, key):
+        with self._lock:
+            entry = self._store.get(key)
+            if not entry:
+                return None
+            val, expire_at = entry
+            if time.time() > expire_at:
+                del self._store[key]
+                return None
+            return val
+
+    def set(self, key, value, ttl_seconds: float = 15.0):
+        with self._lock:
+            self._store[key] = (value, time.time() + ttl_seconds)
+
+    def delete(self, key):
+        with self._lock:
+            self._store.pop(key, None)
+
+    def clear_prefix(self, prefix: str):
+        with self._lock:
+            keys_to_del = [k for k in self._store if k.startswith(prefix)]
+            for k in keys_to_del:
+                self._store.pop(k, None)
+
+    def clear(self):
+        with self._lock:
+            self._store.clear()
+
+
+cache = TTLCache()
+
+
+def invalidate_event_caches(event_id=None):
+    """Safely flush event query caches upon write/update operations."""
+    cache.clear_prefix("list_events:")
+    cache.clear_prefix("all_events")
+    cache.clear_prefix("categories")
+    cache.clear_prefix("student_analytics:")
+    cache.clear_prefix("faculty_analytics:")
+    cache.clear_prefix("admin_summary")
+    if event_id is not None:
+        cache.delete(f"event:{event_id}:True")
+        cache.delete(f"event:{event_id}:False")
+        cache.delete(f"active_regs_count:{event_id}")
+        cache.delete(f"event_capacity:{event_id}")
+    else:
+        cache.clear_prefix("event:")
+        cache.clear_prefix("active_regs_count:")
+        cache.clear_prefix("event_capacity:")
+
+
+def invalidate_registration_caches(event_id=None, student_id=None):
+    """Safely flush registration and participant counts upon booking or check-in."""
+    invalidate_event_caches(event_id)
+    if student_id is not None:
+        cache.delete(f"my_regs:{student_id}")
+        cache.delete(f"student_analytics:{student_id}")
+    else:
+        cache.clear_prefix("my_regs:")
+        cache.clear_prefix("student_analytics:")
+
+
+def invalidate_user_caches(user_id=None):
+    """Safely flush user lookups upon user updates."""
+    cache.clear_prefix("all_users")
+    cache.clear_prefix("faculty_users")
+    cache.clear_prefix("admin_summary")
+    if user_id is not None:
+        cache.delete(f"user:{user_id}")
+    else:
+        cache.clear_prefix("user:")
 
 
 # ============================================================
@@ -45,6 +132,7 @@ def create_user(
     profile_picture: Optional[str] = None,
     is_email_verified: bool = False,
     is_active: bool = True,
+    approval_status: str = "ACTIVE",
 ) -> User:
     db = get_firestore_db()
     user_id = get_next_id("users")
@@ -62,11 +150,59 @@ def create_user(
         profile_picture=profile_picture,
         is_email_verified=is_email_verified,
         is_active=is_active,
+        approval_status=approval_status,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
     db.collection("users").document(str(user_id)).set(user.to_dict())
+    invalidate_user_caches(user_id)
     return user
+
+
+def get_pending_students() -> List[User]:
+    """Retrieve all student accounts awaiting faculty approval."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "student").stream()
+    pending = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and u.approval_status == "PENDING_FACULTY_APPROVAL":
+            pending.append(u)
+    return sorted(pending, key=lambda x: x.created_at or datetime.min, reverse=True)
+
+
+def get_pending_faculty() -> List[User]:
+    """Retrieve all faculty accounts awaiting admin approval."""
+    db = get_firestore_db()
+    docs = db.collection("users").where("role", "==", "faculty").stream()
+    pending = []
+    for doc in docs:
+        u = User.from_dict(doc.to_dict())
+        if u and u.approval_status == "PENDING_ADMIN_APPROVAL":
+            pending.append(u)
+    return sorted(pending, key=lambda x: x.created_at or datetime.min, reverse=True)
+
+
+def approve_user(user_id: int) -> Optional[User]:
+    """Approve a student or faculty account, setting status to ACTIVE."""
+    res = update_user(user_id, {
+        "approval_status": "ACTIVE",
+        "is_active": True,
+    })
+    invalidate_user_caches(user_id)
+    return res
+
+
+def reject_user(user_id: int, reason: Optional[str] = None) -> Optional[User]:
+    """Reject a student or faculty account."""
+    res = update_user(user_id, {
+        "approval_status": "REJECTED",
+        "is_active": False,
+        "rejection_reason": reason or "Account application was not approved by institutional coordinators.",
+    })
+    invalidate_user_caches(user_id)
+    return res
+
 
 
 def get_user_by_id(user_id: int) -> Optional[User]:
@@ -363,12 +499,18 @@ def create_event(
             changed_fields={"status": {"old": None, "new": "Event created"}},
         )
 
+    invalidate_event_caches()
     return event
 
 
 def count_active_registrations_for_event(event_id: int) -> int:
     if event_id is None:
         return 0
+    cache_key = f"active_regs_count:{event_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     try:
         db = get_firestore_db()
         eid_int = int(event_id)
@@ -392,6 +534,7 @@ def count_active_registrations_for_event(event_id: int) -> int:
         1 for d in doc_map.values()
         if str((d.to_dict() or {}).get("status", "")).strip().lower() in SEAT_OCCUPYING_STATUSES
     )
+    cache.set(cache_key, active_count, ttl_seconds=15.0)
     return active_count
 
 
@@ -411,6 +554,11 @@ def get_event_capacity(event_id: int) -> dict:
             "cancelled_count": 0,
             "attended_count": 0,
         }
+    cache_key = f"event_capacity:{event_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
     try:
         eid_int = int(event_id)
@@ -419,7 +567,7 @@ def get_event_capacity(event_id: int) -> dict:
 
     doc = db.collection("events").document(str(eid_int)).get()
     if not doc.exists:
-        return {
+        empty_res = {
             "event_id": int(eid_int) if str(eid_int).isdigit() else 0,
             "totalCapacity": 0,
             "activeRegistrations": 0,
@@ -433,6 +581,8 @@ def get_event_capacity(event_id: int) -> dict:
             "cancelled_count": 0,
             "attended_count": 0,
         }
+        return empty_res
+
     event_data = doc.to_dict() or {}
     total_cap = int(event_data.get("total_seats", 0))
 
@@ -461,17 +611,17 @@ def get_event_capacity(event_id: int) -> dict:
             active_count += 1
         if st == "approved":
             approved_count += 1
-        elif st == "pending" or st == "registered":
+        elif st in ("pending", "registered"):
             pending_count += 1
         elif st == "cancelled":
             cancelled_count += 1
 
-        if st == "attended" or st == "completed" or r.get("checked_in_at"):
+        if st in ("attended", "completed") or r.get("checked_in_at"):
             attended_count += 1
 
     remaining = max(0, total_cap - active_count)
 
-    return {
+    res = {
         "event_id": int(eid_int) if str(eid_int).isdigit() else eid_int,
         "totalCapacity": total_cap,
         "activeRegistrations": active_count,
@@ -485,14 +635,21 @@ def get_event_capacity(event_id: int) -> dict:
         "cancelled_count": cancelled_count,
         "attended_count": attended_count,
     }
+    cache.set(cache_key, res, ttl_seconds=15.0)
+    return res
 
 
 getEventCapacity = get_event_capacity
 
 
-def get_event_by_id(event_id: int) -> Optional[Event]:
+def get_event_by_id(event_id: int, include_live_capacity: bool = True) -> Optional[Event]:
     if event_id is None:
         return None
+    cache_key = f"event:{event_id}:{include_live_capacity}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
     try:
         eid_int = int(event_id)
@@ -516,11 +673,17 @@ def get_event_by_id(event_id: int) -> Optional[Event]:
 
     # Live authoritative available seats calculation
     total_cap = int(event_data.get("total_seats", 0))
-    active_count = count_active_registrations_for_event(eid_int)
-    rem_seats = max(0, total_cap - active_count)
-    event_data["available_seats"] = rem_seats
+    if include_live_capacity:
+        active_count = count_active_registrations_for_event(eid_int)
+        rem_seats = max(0, total_cap - active_count)
+        event_data["available_seats"] = rem_seats
+    else:
+        if "available_seats" not in event_data:
+            event_data["available_seats"] = total_cap
 
-    return Event.from_dict(event_data, doc_id=doc.id)
+    event_obj = Event.from_dict(event_data, doc_id=doc.id)
+    cache.set(cache_key, event_obj, ttl_seconds=20.0)
+    return event_obj
 
 
 def list_events(
@@ -533,6 +696,11 @@ def list_events(
     page: int = 1,
     page_size: int = 9,
 ) -> Tuple[int, List[Event]]:
+    cache_key = f"list_events:{search}:{category}:{date_from}:{date_to}:{sort_by}:{sort_order}:{page}:{page_size}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
 
     # Pre-aggregate active registrations per event_id
@@ -609,10 +777,16 @@ def list_events(
     end = start + page_size
     items = all_events[start:end]
 
-    return total, items
+    res = (total, items)
+    cache.set(cache_key, res, ttl_seconds=15.0)
+    return res
 
 
 def get_all_events() -> List[Event]:
+    cached = cache.get("all_events")
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
     active_counts = defaultdict(int)
     for reg_doc in db.collection("registrations").stream():
@@ -635,10 +809,15 @@ def get_all_events() -> List[Event]:
             active_regs = active_counts.get(ev.id, active_counts.get(str(ev.id), 0))
             ev.available_seats = max(0, min(ev.total_seats, ev.total_seats - active_regs))
             events.append(ev)
+    cache.set("all_events", events, ttl_seconds=15.0)
     return events
 
 
 def get_all_users() -> List[User]:
+    cached = cache.get("all_users")
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
     docs = db.collection("users").stream()
     users = []
@@ -646,6 +825,7 @@ def get_all_users() -> List[User]:
         u = User.from_dict(d.to_dict())
         if u:
             users.append(u)
+    cache.set("all_users", users, ttl_seconds=15.0)
     return users
 
 
@@ -670,6 +850,7 @@ def update_event(event_id: int, updates: dict) -> Optional[Event]:
     if "event_date" in updates and isinstance(updates["event_date"], date):
         updates["event_date"] = updates["event_date"].isoformat()
     doc_ref.update(updates)
+    invalidate_event_caches(event_id)
     return get_event_by_id(event_id)
 
 
@@ -714,6 +895,7 @@ def delete_event(event_id: int) -> bool:
     if not doc.exists:
         return False
     doc_ref.delete()
+    invalidate_event_caches(event_id)
     return True
 
 
@@ -813,6 +995,7 @@ def create_registration_atomic(
         "updated_at": datetime.now(timezone.utc),
     })
 
+    invalidate_registration_caches(event_id, student_id)
     return True, "Registration successful", new_reg
 
 
@@ -839,6 +1022,11 @@ def get_registration_by_id(registration_id: int) -> Optional[Registration]:
 
 
 def get_my_registrations(student_id: int) -> List[Registration]:
+    cache_key = f"my_regs:{student_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     db = get_firestore_db()
     try:
         sid_int = int(student_id)
@@ -850,7 +1038,10 @@ def get_my_registrations(student_id: int) -> List[Registration]:
     if str(sid_int) != sid_int:
         for d in db.collection("registrations").where("student_id", "==", str(sid_int)).stream():
             doc_map[d.id] = d
-    regs: List[Registration] = []
+
+    # Pre-extract unique events without triggering cascading full DB registration scans
+    event_ids = set()
+    raw_regs = []
     for doc in doc_map.values():
         reg_data = doc.to_dict() or {}
         if "id" not in reg_data or reg_data["id"] is None:
@@ -858,9 +1049,29 @@ def get_my_registrations(student_id: int) -> List[Registration]:
                 reg_data["id"] = int(doc.id)
             except Exception:
                 reg_data["id"] = doc.id
-        event = get_event_by_id(reg_data.get("event_id"))
+        ev_id = reg_data.get("event_id")
+        if ev_id is not None:
+            event_ids.add(ev_id)
+        raw_regs.append(reg_data)
+
+    event_map = {}
+    for eid in event_ids:
+        ev = get_event_by_id(eid, include_live_capacity=False)
+        if ev:
+            event_map[eid] = ev
+            event_map[str(eid)] = ev
+            try:
+                event_map[int(eid)] = ev
+            except (ValueError, TypeError):
+                pass
+
+    regs: List[Registration] = []
+    for reg_data in raw_regs:
+        event = event_map.get(reg_data.get("event_id"))
         regs.append(Registration.from_dict(reg_data, event=event))
     regs.sort(key=lambda r: _safe_dt_sort_key(r.registered_at), reverse=True)
+
+    cache.set(cache_key, regs, ttl_seconds=15.0)
     return regs
 
 
@@ -1081,6 +1292,7 @@ def cancel_registration_by_student(registration_id: int, student_id: int) -> Tup
                 "updated_at": datetime.now(timezone.utc),
             })
 
+    invalidate_registration_caches(eid, student_id)
     return True, "Registration cancelled successfully"
 
 
@@ -1136,6 +1348,7 @@ def update_registration_status(
         })
         event.available_seats = rem_seats
 
+    invalidate_registration_caches(reg_data.get("event_id"), reg_data.get("student_id"))
     updated_reg = get_registration_by_id(registration_id)
     return updated_reg, is_cancelling, event, student
 
@@ -1914,6 +2127,11 @@ def create_audit_log(
 # ============================================================
 
 def get_student_analytics(student_id: int, registration_number: Optional[str]) -> dict:
+    cache_key = f"student_analytics:{student_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     registrations = get_my_registrations(student_id)
     active_regs = [
         r for r in registrations
@@ -2030,7 +2248,7 @@ def get_student_analytics(student_id: int, registration_number: Optional[str]) -
             })
     recs.sort(key=lambda x: x["score"], reverse=True)
 
-    return {
+    res = {
         "total_registrations": len(active_regs),
         "completed_events": completed,
         "upcoming_events": upcoming,
@@ -2044,9 +2262,16 @@ def get_student_analytics(student_id: int, registration_number: Optional[str]) -
         "achievements": achievements,
         "recommendations": recs[:4],
     }
+    cache.set(cache_key, res, ttl_seconds=15.0)
+    return res
 
 
 def get_faculty_analytics(faculty_id: int) -> dict:
+    cache_key = f"faculty_analytics:{faculty_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     events = get_events_by_organizer(faculty_id)
     if not events:
         events = get_all_events()
@@ -2150,7 +2375,7 @@ def get_faculty_analytics(faculty_id: int) -> dict:
     except Exception:
         pass
 
-    return {
+    res = {
         "total_events_created": len(events),
         "total_registrations_received": total_registrations,
         "total_attendance": total_attended,
@@ -2165,6 +2390,8 @@ def get_faculty_analytics(faculty_id: int) -> dict:
         "feedback_insights": feedback_insights,
         "faculty_activity": faculty_activity[:6],
     }
+    cache.set(cache_key, res, ttl_seconds=15.0)
+    return res
 
 
 # ============================================================

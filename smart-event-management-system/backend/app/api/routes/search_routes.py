@@ -242,8 +242,45 @@ def global_search(
                             category="Faculty Directory",
                             subtitle=f"{f.get('department')} · {f.get('email')} · {f.get('assigned_tasks_count', 0)} tasks",
                             link=f"{base_path}/faculty",
-                            badge=f.get("department"),
+                            badge=f.get("department") or "Faculty",
                         ))
+                # Pending Faculty Approvals
+                try:
+                    pending_fac = db_service.get_pending_faculty()
+                    for pf in pending_fac:
+                        p_name = (pf.name or "").lower()
+                        p_email = (pf.email or "").lower()
+                        p_dept = (pf.department or "").lower()
+                        if query_str in p_name or query_str in p_email or query_str in p_dept or "pending" in query_str or "approval" in query_str:
+                            results.append(SearchResultItem(
+                                id=f"pending-fac-{pf.id}",
+                                title=f"Pending Approval: {pf.name}",
+                                category="Faculty Approvals",
+                                subtitle=f"{pf.department or 'Faculty'} · {pf.email} · Awaiting Admin Verification",
+                                link=f"{base_path}/faculty",
+                                badge="Pending Approval",
+                            ))
+                except Exception:
+                    pass
+            elif role == "faculty":
+                # Pending Student Approvals for Faculty
+                try:
+                    pending_stu = db_service.get_pending_students()
+                    for ps in pending_stu:
+                        ps_name = (ps.name or "").lower()
+                        ps_reg = (ps.registration_number or "").lower()
+                        ps_dept = (ps.department or "").lower()
+                        if query_str in ps_name or query_str in ps_reg or query_str in ps_dept or "pending" in query_str or "approval" in query_str:
+                            results.append(SearchResultItem(
+                                id=f"pending-stu-{ps.id}",
+                                title=f"Pending Student: {ps.name}",
+                                category="Student Approvals",
+                                subtitle=f"Reg: {ps.registration_number or 'N/A'} · {ps.department or 'Dept'} · Awaiting Faculty Approval",
+                                link=f"{base_path}/dashboard",
+                                badge="Pending Approval",
+                            ))
+                except Exception:
+                    pass
         except Exception as task_err:
             logger.debug(f"Search tasks query error: {task_err}")
 

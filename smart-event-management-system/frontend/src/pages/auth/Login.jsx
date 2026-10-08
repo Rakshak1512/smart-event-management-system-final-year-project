@@ -46,6 +46,22 @@ export default function Login() {
     return "/student/dashboard";
   };
 
+  const getAuthErrorMessage = (err) => {
+    if (!err) return "Login failed. Please check your credentials.";
+    if (err.code === "ERR_NETWORK" || !err.response) {
+      return "Authentication server is unavailable. Please make sure the EventSphere backend is running at http://localhost:8000.";
+    }
+    const status = err.response.status;
+    const detail = err.response.data?.detail;
+    if (typeof detail === "string") return detail;
+    if (Array.isArray(detail) && detail.length > 0) return detail[0].message || detail[0];
+    if (status === 401) return "Invalid email or password.";
+    if (status === 403) return "Your account does not have permission for this role, or email is unverified.";
+    if (status === 404) return "Account not found. Please register first.";
+    if (status >= 500) return "Authentication service encountered an error. Please try again.";
+    return "Login failed. Please check your credentials.";
+  };
+
   const handleUseAccount = (account) => {
     setRole(account.role);
     setForm((f) => ({ ...f, email: account.email, password: account.password }));
@@ -67,16 +83,15 @@ export default function Login() {
         remember_me: form.remember_me,
       });
       setIsTestModalOpen(false);
-      toast.success(`Welcome back, ${user.name.split(" ")[0]}!`);
+      toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
       const dest = location.state?.from || getDashboardDestination(user.role);
       navigate(dest, { replace: true });
     } catch (err) {
-      if (!err.response) {
-        toast.error("Unable to connect to the server. Please try again.");
-        return;
+      const msg = getAuthErrorMessage(err);
+      toast.error(msg);
+      if (err.response?.data?.detail === "Please verify your email first") {
+        navigate("/verify-email", { state: { email: account.email } });
       }
-      const detail = err.response?.data?.detail;
-      toast.error(typeof detail === "string" ? detail : "Login failed. Please check your credentials.");
     } finally {
       setSubmitting(false);
     }
@@ -96,22 +111,14 @@ export default function Login() {
     setSubmitting(true);
     try {
       const user = await login({ ...form, role });
-      toast.success(`Welcome back, ${user.name.split(" ")[0]}!`);
+      toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
       const dest = location.state?.from || getDashboardDestination(user.role);
       navigate(dest, { replace: true });
     } catch (err) {
-      if (!err.response) {
-        toast.error("Unable to connect to the server. Please try again.");
-        return;
-      }
-      const detail = err.response?.data?.detail;
-      if (detail === "Please verify your email first") {
-        toast.error("Please verify your email first");
+      const msg = getAuthErrorMessage(err);
+      toast.error(msg);
+      if (err.response?.data?.detail === "Please verify your email first") {
         navigate("/verify-email", { state: { email: form.email } });
-      } else if (typeof detail === "string") {
-        toast.error(detail);
-      } else {
-        toast.error("Login failed. Please check your credentials.");
       }
     } finally {
       setSubmitting(false);
@@ -153,7 +160,7 @@ export default function Login() {
         role,
         remember_me: form.remember_me,
       });
-      toast.success(`Welcome back, ${user.name.split(" ")[0]}!`);
+      toast.success(`Welcome back, ${user?.name ? user.name.split(" ")[0] : "User"}!`);
       const dest =
         location.state?.from ||
         (user.role === "admin"

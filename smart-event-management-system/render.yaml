@@ -2,7 +2,7 @@ services:
   - type: web
     name: eventsphere-backend
     runtime: python
-    rootDir: smart-event-management-system/backend
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -24,6 +24,10 @@ services:
         sync: false
       - key: FIREBASE_PRIVATE_KEY
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
       - key: SMTP_HOST
         value: smtp.gmail.com
       - key: SMTP_PORT
@@ -40,7 +44,7 @@ services:
   - type: web
     name: eventsphere-frontend
     runtime: static
-    rootDir: smart-event-management-system/frontend
+    rootDir: frontend
     buildCommand: npm install && npm run build
     staticPublishPath: dist
     routes:

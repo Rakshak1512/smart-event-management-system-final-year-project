@@ -44,7 +44,9 @@ class Settings(BaseSettings):
     # Option 3: Local Firestore Emulator (e.g. "localhost:8080")
     FIRESTORE_EMULATOR_HOST: str = ""
 
-    # SMTP Email Configuration
+    # Email Providers (Resend API & SMTP)
+    RESEND_API_KEY: str = ""
+    RESEND_FROM_EMAIL: str = ""
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""

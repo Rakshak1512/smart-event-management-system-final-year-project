@@ -1,20 +1,29 @@
 import axios from "axios";
 
-// When accessed from an external device or tunnel, route via relative "/api" through Vite's proxy
-// so external clients never attempt to contact an unreachable localhost URL.
-const isExternalAccess =
-  typeof window !== "undefined" &&
-  window.location.hostname !== "localhost" &&
-  window.location.hostname !== "127.0.0.1";
+export const API_BASE_URL = (() => {
+  if (typeof window === "undefined") return "/api";
+  const raw = (import.meta.env.VITE_API_URL || "http://localhost:8000").trim();
+  const isLocal = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
-const rawApiUrl = import.meta.env.VITE_API_URL || "";
-export const API_BASE_URL = isExternalAccess
-  ? "/api"
-  : rawApiUrl
-  ? rawApiUrl.replace(/\/+$/, "").endsWith("/api")
-    ? rawApiUrl.replace(/\/+$/, "")
-    : `${rawApiUrl.replace(/\/+$/, "")}/api`
-  : "/api";
+  if (isLocal) {
+    return raw.replace(/\/+$/, "").endsWith("/api")
+      ? raw.replace(/\/+$/, "")
+      : `${raw.replace(/\/+$/, "")}/api`;
+  }
+
+  // When accessed via external URL / Cloudflare Tunnel / Cloudflare Pages / Render
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    // If configured pointing to localhost but accessed from external device or tunnel, route through relative /api
+    if (raw.includes("localhost") || raw.includes("127.0.0.1")) {
+      return "/api";
+    }
+    return raw.replace(/\/+$/, "").endsWith("/api")
+      ? raw.replace(/\/+$/, "")
+      : `${raw.replace(/\/+$/, "")}/api`;
+  }
+
+  return "/api";
+})();
 
 const api = axios.create({
   baseURL: API_BASE_URL,

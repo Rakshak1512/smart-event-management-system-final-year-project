@@ -15,11 +15,21 @@ export function RealtimeProvider({ children }) {
     }
 
     try {
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const isExternal = window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
-      const wsUrl = isExternal
-        ? `${protocol}//${window.location.host}/api/ws`
-        : `${protocol}//${window.location.hostname || "localhost"}:8000/api/ws`;
+      const rawApiUrl = (import.meta.env.VITE_API_URL || "http://localhost:8000").trim();
+      const isLocal = typeof window !== "undefined" && (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1");
+      let wsUrl = "";
+      if (isLocal && (rawApiUrl.startsWith("http://") || rawApiUrl.startsWith("https://"))) {
+        const parsed = new URL(rawApiUrl);
+        const wsProto = parsed.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${wsProto}//${parsed.host}/api/ws`;
+      } else if (!isLocal && (rawApiUrl.startsWith("http://") || rawApiUrl.startsWith("https://")) && !rawApiUrl.includes("localhost") && !rawApiUrl.includes("127.0.0.1")) {
+        const parsed = new URL(rawApiUrl);
+        const wsProto = parsed.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${wsProto}//${parsed.host}/api/ws`;
+      } else {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        wsUrl = `${protocol}//${window.location.host}/api/ws`;
+      }
 
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;

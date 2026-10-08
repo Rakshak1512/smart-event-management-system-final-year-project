@@ -87,6 +87,8 @@ class UserOut(BaseModel):
     role: RoleEnum
     profile_picture: Optional[str] = None
     is_email_verified: bool
+    is_active: bool = True
+    approval_status: Optional[str] = "ACTIVE"
     created_at: datetime
 
     model_config = {"from_attributes": True}

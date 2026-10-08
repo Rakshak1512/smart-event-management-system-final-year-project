@@ -86,7 +86,14 @@ export default function ForgotPassword() {
       setStep(STEPS.OTP);
     } catch (err) {
       console.error("Forgot password error:", err);
-      toast.error("Unable to send OTP. Please check your email and try again.");
+      const detail = err.response?.data?.detail || err.response?.data?.message;
+      let msg = "Unable to send OTP. Please check your email and try again.";
+      if (typeof detail === "string") {
+        msg = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        msg = detail.map((d) => (typeof d === "string" ? d : d.message || d.msg || JSON.stringify(d))).join(", ");
+      }
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -107,7 +114,14 @@ export default function ForgotPassword() {
       setTimeLeft(600);
     } catch (err) {
       console.error("Resend OTP error:", err);
-      toast.error("Could not resend OTP. Please try again.");
+      const detail = err.response?.data?.detail || err.response?.data?.message;
+      let msg = "Could not resend OTP. Please try again.";
+      if (typeof detail === "string") {
+        msg = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        msg = detail.map((d) => (typeof d === "string" ? d : d.message || d.msg || JSON.stringify(d))).join(", ");
+      }
+      toast.error(msg);
     } finally {
       setResending(false);
     }

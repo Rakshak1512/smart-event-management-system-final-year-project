@@ -9,30 +9,33 @@ TEST_USERS = [
     {
         "name": "Student Demo",
         "email": "student@test.com",
-        "password": "Student@123",
+        "password": "Student@12345",
         "role": RoleEnum.student,
-        "registration_number": "21CS001",
+        "registration_number": "TESTSTU001",
         "department": "Computer Science",
         "semester": "6",
     },
     {
         "name": "Faculty Demo",
         "email": "faculty@test.com",
-        "password": "Faculty@123",
+        "password": "Faculty@12345",
         "role": RoleEnum.faculty,
+        "registration_number": "TESTFAC001",
+        "admin_id": "TESTFAC001",
         "department": "Computer Science",
     },
     {
         "name": "Volunteer Demo",
         "email": "volunteer@test.com",
-        "password": "Volunteer@123",
+        "password": "Volunteer@12345",
         "role": RoleEnum.volunteer,
+        "registration_number": "TESTVOL001",
         "department": "Computer Science",
     },
     {
         "name": "Admin Demo",
         "email": "admin@test.com",
-        "password": "Admin@123",
+        "password": "Admin@12345",
         "role": RoleEnum.admin,
         "registration_number": "ADM-001",
         "admin_id": "ADM-001",
@@ -64,6 +67,7 @@ def seed_test_users():
                     semester=item.get("semester"),
                     is_email_verified=True,
                     is_active=True,
+                    approval_status="ACTIVE",
                 )
                 logger.info("Demo user seeded: %s (%s)", clean_email, role.value)
             else:
@@ -74,6 +78,8 @@ def seed_test_users():
                     updates["is_email_verified"] = True
                 if not existing.is_active:
                     updates["is_active"] = True
+                if getattr(existing, "approval_status", "ACTIVE") != "ACTIVE":
+                    updates["approval_status"] = "ACTIVE"
 
                 existing_role_str = (
                     existing.role.value if hasattr(existing.role, "value") else str(existing.role)

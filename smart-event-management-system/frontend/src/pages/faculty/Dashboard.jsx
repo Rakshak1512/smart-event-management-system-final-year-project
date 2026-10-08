@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { FiCalendar, FiUsers, FiAward, FiPlusSquare, FiArrowRight, FiCheckCircle } from "react-icons/fi";
+import { FiCalendar, FiUsers, FiAward, FiPlusSquare, FiArrowRight, FiCheckCircle, FiX, FiAlertCircle } from "react-icons/fi";
+import toast from "react-hot-toast";
 import StatCard from "../../components/dashboard/StatCard.jsx";
 import { SkeletonGrid } from "../../components/ui/Loader.jsx";
 import PageTransition from "../../components/common/PageTransition.jsx";
-import { analyticsService, eventService } from "../../api/services.js";
+import { analyticsService, eventService, facultyApprovalService } from "../../api/services.js";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { useRealtime } from "../../context/RealtimeContext.jsx";
 import { formatDate } from "../../utils/format.js";
@@ -15,17 +16,49 @@ export default function FacultyDashboard() {
   const { addListener } = useRealtime();
   const [analytics, setAnalytics] = useState(null);
   const [recentEvents, setRecentEvents] = useState([]);
+  const [pendingStudents, setPendingStudents] = useState([]);
+  const [approvingId, setApprovingId] = useState(null);
+  const [rejectingId, setRejectingId] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const loadData = () => {
     Promise.all([
       analyticsService.faculty().then(({ data }) => data).catch(() => null),
       eventService.list({ page: 1, page_size: 5, sort_by: "created_at", sort_order: "desc" }).then(({ data }) => data.items || []).catch(() => []),
-    ]).then(([a, ev]) => {
+      facultyApprovalService.pendingStudents().then(({ data }) => data || []).catch(() => []),
+    ]).then(([a, ev, students]) => {
       setAnalytics(a);
       setRecentEvents(ev);
+      setPendingStudents(students);
       setLoading(false);
     });
+  };
+
+  const handleApproveStudent = async (studentId, studentName) => {
+    setApprovingId(studentId);
+    try {
+      await facultyApprovalService.approveStudent(studentId);
+      toast.success(`Student account for ${studentName} approved!`);
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to approve student.");
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const handleRejectStudent = async (studentId, studentName) => {
+    if (!window.confirm(`Reject registration for ${studentName}?`)) return;
+    setRejectingId(studentId);
+    try {
+      await facultyApprovalService.rejectStudent(studentId, "Academic registration details could not be validated.");
+      toast.success(`Student registration for ${studentName} rejected.`);
+      loadData();
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to reject student.");
+    } finally {
+      setRejectingId(null);
+    }
   };
 
   useEffect(() => {
@@ -106,6 +139,139 @@ export default function FacultyDashboard() {
             }
             accent="#22c55e"
           />
+        </div>
+      )}
+
+      {/* Pending Student Approvals Section */}
+      {pendingStudents.length > 0 && (
+        <div
+          style={{
+            marginBottom: 28,
+            padding: "20px 24px",
+            background: "rgba(99, 102, 241, 0.08)",
+            borderRadius: 16,
+            border: "1px solid rgba(99, 102, 241, 0.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "#6366f1",
+                  boxShadow: "0 0 8px #6366f1",
+                }}
+              />
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#818cf8" }}>
+                Pending Student Registrations Awaiting Faculty Verification ({pendingStudents.length})
+              </h3>
+            </div>
+            <span style={{ fontSize: 12.5, color: "#94a3b8" }}>
+              Approve students to unlock their event registration & QR pass access
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+            {pendingStudents.map((stu) => (
+              <div
+                key={stu.id}
+                style={{
+                  background: "var(--bg-card, #1e293b)",
+                  border: "1px solid var(--border-color, #334155)",
+                  borderRadius: 12,
+                  padding: "16px 18px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#ffffff" }}>
+                      {stu.name}
+                    </h4>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: "rgba(99, 102, 241, 0.2)",
+                        color: "#a5b4fc",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Awaiting Approval
+                    </span>
+                  </div>
+                  {stu.registration_number && (
+                    <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                      <strong>Register No:</strong> <span style={{ fontFamily: "monospace", color: "#38bdf8" }}>{stu.registration_number}</span>
+                    </p>
+                  )}
+                  <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                    <strong>Email:</strong> {stu.email}
+                  </p>
+                  <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                    <strong>Department:</strong> {stu.department || "General"} {stu.semester ? `(Sem ${stu.semester})` : ""}
+                  </p>
+                  <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#64748b" }}>
+                    Registered: {formatDate(stu.created_at)}
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <button
+                    onClick={() => handleApproveStudent(stu.id, stu.name)}
+                    disabled={approvingId === stu.id || rejectingId === stu.id}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      opacity: approvingId === stu.id ? 0.7 : 1,
+                    }}
+                  >
+                    <FiCheckCircle size={14} />
+                    {approvingId === stu.id ? "Approving..." : "Approve Student"}
+                  </button>
+                  <button
+                    onClick={() => handleRejectStudent(stu.id, stu.name)}
+                    disabled={approvingId === stu.id || rejectingId === stu.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      background: "transparent",
+                      color: "#ef4444",
+                      border: "1px solid rgba(239, 68, 68, 0.4)",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      opacity: rejectingId === stu.id ? 0.7 : 1,
+                    }}
+                  >
+                    <FiX size={14} />
+                    {rejectingId === stu.id ? "Rejecting..." : "Reject"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

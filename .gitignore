@@ -90,3 +90,15 @@ scratch/
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Cloudflare local development secrets
+.dev.vars
+**/.dev.vars
+.wrangler/
+
+
+# Cloudflare local development secrets
+.dev.vars
+**/.dev.vars
+.wrangler/
+

@@ -79,6 +79,58 @@ def get_chatbot_response(user: User, message: str, history: Optional[List[Dict[s
         # Token / Intent Helper Sets
         has_any = lambda words: any(w in clean_msg for w in words)
 
+        # Security Guardrail: Prompt Injection & Sensitive Data Protection
+        sensitive_patterns = [
+            "ignore previous instructions", "system prompt", "api key", "resend_api_key",
+            "firebase_private_key", "jwt_secret", "database credentials", "password hash",
+            "admin password", "other student", "another student", "all students passwords",
+            "sql injection", "drop table", "reveal secrets", "bypass authentication"
+        ]
+        if any(p in clean_msg for p in sensitive_patterns):
+            return {
+                "reply": "🔒 **Security Notice:** I cannot disclose system credentials, private keys, API configurations, or another user's personal records. My assistance is strictly confined to verified EventSphere campus activities and your own authorized profile.",
+                "suggestions": ["What events are available?", "What events am I registered for?", "How does account approval work?"],
+            }
+
+        # Cross-Role Workflow Inquiries
+        if has_any(["how does approval work", "approval process", "account approval", "pending approval", "faculty approval", "admin approval"]):
+            appr_status = getattr(user, "approval_status", "ACTIVE") or "ACTIVE"
+            if role == "student":
+                st_desc = "Your student account is currently **ACTIVE** and fully approved." if appr_status == "ACTIVE" else "Your account is **Awaiting Faculty Approval**."
+                return {
+                    "reply": f"📋 **EventSphere Account Approval Workflow:**\n\n1. **Student Registration:** Students sign up and verify their email via a 6-digit OTP.\n2. **Faculty Verification:** Department faculty review student credentials.\n3. **Active Status:** Once approved by faculty, the student dashboard and event registration unlock.\n\n• **Your Status:** {st_desc}",
+                    "suggestions": ["What events are available?", "How do I register?", "Where is my QR code?"],
+                }
+            elif role == "faculty":
+                st_desc = "Your faculty account is currently **ACTIVE**." if appr_status == "ACTIVE" else "Your faculty account is **Awaiting Admin Approval**."
+                return {
+                    "reply": f"📋 **Faculty Approval Workflow:**\n\n1. **Faculty Registration:** Faculty sign up and verify email.\n2. **Admin Review:** System Administrator reviews faculty department and credentials.\n3. **Approval:** Once approved by Admin, faculty can create events, approve student accounts, and view analytics.\n\n• **Your Status:** {st_desc}\n\n👉 *You can review and approve pending students from the Faculty Portal.*",
+                    "suggestions": ["Show pending students", "How many events are active?", "What work is assigned?"],
+                }
+            elif role == "admin":
+                return {
+                    "reply": "📋 **Administrative Approvals:**\n\nAs an Administrator, you have full authority to approve or reject pending faculty registrations under **Faculty Directory & Approvals**.",
+                    "suggestions": ["Show pending faculty", "How many events are active?", "Show reports"],
+                }
+
+        if has_any(["how to get certificate", "certificate process", "how do i get my certificate", "when do i get certificate"]):
+            return {
+                "reply": "🎓 **Certificate Issuance Process:**\n\n1. **Register:** Register for a campus event via EventSphere.\n2. **Attend:** Have your ticket QR code verified by event volunteers at the venue entrance.\n3. **Issuance:** After the event concludes, faculty coordinators issue participation and merit certificates.\n4. **Download:** Digital certificates appear in your **Certificates** tab as verifiable high-resolution PDFs.",
+                "suggestions": ["Show my certificates", "What events am I registered for?", "What events are available?"],
+            }
+
+        if has_any(["qr ticket", "qr pass", "how does qr work", "how do i scan qr", "scanner work"]):
+            if role == "student":
+                return {
+                    "reply": "🎟️ **Digital QR Tickets:**\n\nWhen you register for an approved event, a personalized digital QR pass is generated under **My Registrations**. Simply display the QR pass on your phone screen at the venue entrance for the volunteer scanner team.",
+                    "suggestions": ["What events am I registered for?", "Where is my QR code?", "What events are available?"],
+                }
+            elif role in ("volunteer", "faculty"):
+                return {
+                    "reply": "📷 **Volunteer QR Check-in System:**\n\n1. Open the **QR Scanner** on your Volunteer or Faculty Dashboard.\n2. Allow camera permissions (supports Front and Back cameras with standard lens filtering).\n3. Point at the attendee's ticket or upload a saved ticket image.\n4. Click **Confirm Attendance** once attendee details appear. Duplicate check-ins are automatically blocked.",
+                    "suggestions": ["Show my assigned events", "How many attendees scanned?"],
+                }
+
         is_reg_query = has_any(["register", "registration", "registered", "enrolled", "sign up", "entry"])
         is_att_query = has_any(["attend", "attended", "attendance", "checked in", "check-in", "present", "came", "roster"])
         is_cert_query = has_any(["cert", "certificate", "certificates", "diploma", "credential", "award letter"])
@@ -238,10 +290,17 @@ def get_chatbot_response(user: User, message: str, history: Optional[List[Dict[s
                     "suggestions": ["How do I register?", "What events am I registered for?", "Show my certificates"],
                 }
 
-            # Student Default Fallback
+            # Greetings vs Unknown Queries
+            if has_any(["hi", "hello", "hey", "who are you", "help", "good morning", "good evening"]):
+                return {
+                    "reply": f"Hello {user.name}! I am **EventSphere AI**. You can ask me about available events, your registered events, attendance check-ins, seats remaining, or downloading certificates.",
+                    "suggestions": ["What events am I registered for?", "Show my certificates", "What events are available?", "Did I attend the event?"],
+                }
+
+            # Out of Domain / Unknown Query Refusal
             return {
-                "reply": f"Hello {user.name}! I am **EventSphere AI**. You can ask me about available events, your registered events, attendance check-ins, seats remaining, or downloading certificates.",
-                "suggestions": ["What events am I registered for?", "Show my certificates", "What events are available?", "Did I attend the event?"],
+                "reply": "I don't have enough information to answer that accurately. I can assist with EventSphere event registrations, schedules, QR attendance, account approvals, and certificates.",
+                "suggestions": ["What events are available?", "What events am I registered for?", "How does approval work?"],
             }
 
         # =========================================================================
@@ -502,15 +561,15 @@ def get_chatbot_response(user: User, message: str, history: Optional[List[Dict[s
                 "suggestions": ["How many faculty are there?", "What work is assigned?", "How many events are active?", "Show reports"],
             }
 
-        # Default Fallback
+        # Default Fallback: Prompt specifically mandates: If it does not know something: Say: "I don't have enough information to answer that accurately."
         return {
-            "reply": "I am **EventSphere AI**. How can I assist you with events, registrations, schedules, or attendance today?",
-            "suggestions": ["What events are available?", "What events am I registered for?"],
+            "reply": "I don't have enough information to answer that accurately. I can assist with EventSphere event registrations, schedules, QR attendance, account approvals, and certificates.",
+            "suggestions": ["What events are available?", "What events am I registered for?", "How does approval work?"],
         }
 
     except Exception as e:
         logger.exception("Error in chatbot response generation: %s", e)
         return {
-            "reply": "I couldn't retrieve the latest EventSphere data right now. Please try asking again in a moment.",
+            "reply": "I don't have enough information to answer that accurately right now. Please try asking about available campus events or registration status.",
             "suggestions": ["What events are available?", "What events am I registered for?"],
         }

@@ -48,7 +48,7 @@ app.add_middleware(
     allow_origins=settings.cors_origin_list,
     allow_origin_regex=r"https://.*\.trycloudflare\.com|https://.*\.loca\.lt",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -63,19 +63,20 @@ app.mount("/uploads", StaticFiles(directory=settings.upload_dir_abs), name="uplo
 def on_startup():
     try:
         init_firebase()
-        logger.info("Firebase Firestore initialized and connected.")
+        logger.info("[FIREBASE] Firebase Firestore initialized and connected successfully.")
     except Exception as e:
-        logger.error(f"Error initializing Firebase: {e}")
+        logger.error(f"[FIREBASE] Error initializing Firebase Firestore: {e}")
 
     try:
         from app.services.seed_service import seed_test_users
         seed_test_users()
     except Exception as e:
-        logger.error(f"Error seeding test users: {e}")
+        logger.error(f"[AUTH] Error seeding test users: {e}")
 
-    # Safe SMTP configuration startup validation without exposing passwords
+    # Safe email configuration validation without exposing credentials or keys
+    resend_loaded = bool((settings.RESEND_API_KEY or "").strip())
     smtp_loaded = bool(settings.SMTP_HOST and settings.SMTP_USER and settings.SMTP_PASSWORD)
-    logger.info(f"SMTP configuration loaded: {'YES' if smtp_loaded else 'NO'} (Host: {settings.SMTP_HOST}:{settings.SMTP_PORT})")
+    logger.info(f"[EMAIL] Provider Status -> Resend API: {'ENABLED' if resend_loaded else 'NOT CONFIGURED'} | SMTP: {'ENABLED' if smtp_loaded else 'NOT CONFIGURED'} (Host: {settings.SMTP_HOST}:{settings.SMTP_PORT})")
 
 
 @app.exception_handler(RequestValidationError)
@@ -120,6 +121,7 @@ app.include_router(feedback_routes.router)
 app.include_router(volunteer_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(admin_routes.faculty_task_router)
+app.include_router(admin_routes.faculty_approval_router)
 app.include_router(result_routes.router)
 app.include_router(search_routes.router)
 app.include_router(websocket_routes.router)

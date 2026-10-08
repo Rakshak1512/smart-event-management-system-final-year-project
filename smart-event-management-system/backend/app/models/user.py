@@ -34,6 +34,7 @@ class User:
         profile_picture: Optional[str] = None,
         is_email_verified: bool = False,
         is_active: bool = True,
+        approval_status: str = "ACTIVE",
         created_at: Optional[datetime] = None,
         updated_at: Optional[datetime] = None,
     ):
@@ -64,6 +65,7 @@ class User:
         self.profile_picture = profile_picture
         self.is_email_verified = bool(is_email_verified)
         self.is_active = bool(is_active)
+        self.approval_status = str(approval_status or "ACTIVE").upper().strip()
         self.created_at = created_at or datetime.utcnow()
         self.updated_at = updated_at or datetime.utcnow()
 
@@ -82,6 +84,7 @@ class User:
             "profile_picture": self.profile_picture,
             "is_email_verified": self.is_email_verified,
             "is_active": self.is_active,
+            "approval_status": self.approval_status,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -90,6 +93,10 @@ class User:
     def from_dict(cls, data: dict) -> "User":
         if not data:
             return None
+        # Default legacy or active users without explicit approval_status to ACTIVE
+        st = data.get("approval_status")
+        if not st:
+            st = "ACTIVE" if data.get("is_active", True) else "PENDING_FACULTY_APPROVAL"
         return cls(
             id=data.get("id"),
             name=data.get("name", ""),
@@ -104,6 +111,7 @@ class User:
             profile_picture=data.get("profile_picture"),
             is_email_verified=data.get("is_email_verified", False),
             is_active=data.get("is_active", True),
+            approval_status=st,
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

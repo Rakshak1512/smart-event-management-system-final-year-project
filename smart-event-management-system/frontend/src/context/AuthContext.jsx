@@ -5,32 +5,52 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
-    const stored = localStorage.getItem("sems-user");
-    return stored ? JSON.parse(stored) : null;
+    try {
+      const stored = localStorage.getItem("sems-user");
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
   });
-  const [loading, setLoading] = useState(true);
+
+  // If both token and user profile are already cached in localStorage, start with loading=false
+  // so protected routes render instantly (0ms) without waiting for network roundtrips.
+  const [loading, setLoading] = useState(() => {
+    const token = typeof window !== "undefined" ? localStorage.getItem("sems-access-token") : null;
+    const stored = typeof window !== "undefined" ? localStorage.getItem("sems-user") : null;
+    return Boolean(token && !stored);
+  });
 
   useEffect(() => {
+    let isMounted = true;
     const bootstrap = async () => {
       const token = localStorage.getItem("sems-access-token");
       if (!token) {
-        setLoading(false);
+        if (isMounted) setLoading(false);
         return;
       }
       try {
         const { data } = await api.get("/auth/me");
-        setUser(data);
-        localStorage.setItem("sems-user", JSON.stringify(data));
-      } catch {
-        localStorage.removeItem("sems-access-token");
-        localStorage.removeItem("sems-refresh-token");
-        localStorage.removeItem("sems-user");
-        setUser(null);
+        if (isMounted) {
+          setUser(data);
+          localStorage.setItem("sems-user", JSON.stringify(data));
+        }
+      } catch (err) {
+        // If 401 Unauthorized, token is expired/invalid
+        if (err.response?.status === 401 && isMounted) {
+          localStorage.removeItem("sems-access-token");
+          localStorage.removeItem("sems-refresh-token");
+          localStorage.removeItem("sems-user");
+          setUser(null);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
     bootstrap();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   const login = async ({ email, password, role, remember_me }) => {

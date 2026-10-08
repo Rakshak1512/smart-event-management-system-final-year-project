@@ -41,13 +41,20 @@ export default function FacultyList() {
     deadline: "",
   });
   const [submitting, setSubmitting] = useState(false);
+  const [pendingFaculty, setPendingFaculty] = useState([]);
+  const [approvingId, setApprovingId] = useState(null);
+  const [rejectingId, setRejectingId] = useState(null);
 
-  // Fetch live faculty list
+  // Fetch live faculty list & pending approval requests
   const loadFaculty = useCallback(async (showLoader = true) => {
     if (showLoader) setLoading(true);
     try {
-      const { data } = await adminService.facultyList();
-      setFaculty(data || []);
+      const [facRes, pendRes] = await Promise.all([
+        adminService.facultyList(),
+        adminService.pendingFaculty().catch(() => ({ data: [] })),
+      ]);
+      setFaculty(facRes.data || []);
+      setPendingFaculty(pendRes.data || []);
     } catch (err) {
       console.error("Failed to load faculty directory:", err);
       if (showLoader) toast.error("Could not load faculty directory");
@@ -55,6 +62,33 @@ export default function FacultyList() {
       if (showLoader) setLoading(false);
     }
   }, []);
+
+  const handleApproveFaculty = async (facultyId, facultyName) => {
+    setApprovingId(facultyId);
+    try {
+      await adminService.approveFaculty(facultyId);
+      toast.success(`Faculty account for ${facultyName} has been approved!`);
+      loadFaculty(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to approve faculty account.");
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  const handleRejectFaculty = async (facultyId, facultyName) => {
+    if (!window.confirm(`Are you sure you want to reject faculty registration for ${facultyName}?`)) return;
+    setRejectingId(facultyId);
+    try {
+      await adminService.rejectFaculty(facultyId, "Credentials could not be verified by institutional administrator.");
+      toast.success(`Faculty registration for ${facultyName} has been rejected.`);
+      loadFaculty(false);
+    } catch (err) {
+      toast.error(err.response?.data?.detail || "Failed to reject faculty account.");
+    } finally {
+      setRejectingId(null);
+    }
+  };
 
   useEffect(() => {
     loadFaculty(true);
@@ -211,6 +245,139 @@ export default function FacultyList() {
           </button>
         </div>
       </div>
+
+      {/* Pending Faculty Approvals Section */}
+      {pendingFaculty.length > 0 && (
+        <div
+          style={{
+            marginBottom: 28,
+            padding: "20px 24px",
+            background: "rgba(245, 158, 11, 0.08)",
+            borderRadius: 16,
+            border: "1px solid rgba(245, 158, 11, 0.3)",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: "#f59e0b",
+                  boxShadow: "0 0 8px #f59e0b",
+                }}
+              />
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#f59e0b" }}>
+                Pending Faculty Registrations Requiring Admin Approval ({pendingFaculty.length})
+              </h3>
+            </div>
+            <span style={{ fontSize: 12.5, color: "#94a3b8" }}>
+              Action required to unlock faculty portal access
+            </span>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14 }}>
+            {pendingFaculty.map((pf) => (
+              <div
+                key={pf.id}
+                style={{
+                  background: "var(--bg-card, #1e293b)",
+                  border: "1px solid var(--border-color, #334155)",
+                  borderRadius: 12,
+                  padding: "16px 18px",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  gap: 12,
+                }}
+              >
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
+                    <h4 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#ffffff" }}>
+                      {pf.name}
+                    </h4>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        background: "rgba(245, 158, 11, 0.2)",
+                        color: "#f59e0b",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Awaiting Review
+                    </span>
+                  </div>
+                  <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                    <strong>Email:</strong> {pf.email}
+                  </p>
+                  <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                    <strong>Department:</strong> {pf.department || "General"}
+                  </p>
+                  {pf.admin_id && (
+                    <p style={{ margin: "2px 0", fontSize: 13, color: "#94a3b8" }}>
+                      <strong>Faculty ID:</strong> <span style={{ fontFamily: "monospace", color: "#818cf8" }}>{pf.admin_id}</span>
+                    </p>
+                  )}
+                  <p style={{ margin: "4px 0 0", fontSize: 11.5, color: "#64748b" }}>
+                    Registered: {formatDate(pf.created_at)}
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <button
+                    onClick={() => handleApproveFaculty(pf.id, pf.name)}
+                    disabled={approvingId === pf.id || rejectingId === pf.id}
+                    style={{
+                      flex: 1,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                      color: "#fff",
+                      border: "none",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      opacity: approvingId === pf.id ? 0.7 : 1,
+                    }}
+                  >
+                    <FiCheckCircle size={14} />
+                    {approvingId === pf.id ? "Approving..." : "Approve Faculty"}
+                  </button>
+                  <button
+                    onClick={() => handleRejectFaculty(pf.id, pf.name)}
+                    disabled={approvingId === pf.id || rejectingId === pf.id}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      background: "transparent",
+                      color: "#ef4444",
+                      border: "1px solid rgba(239, 68, 68, 0.4)",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      opacity: rejectingId === pf.id ? 0.7 : 1,
+                    }}
+                  >
+                    <FiX size={14} />
+                    {rejectingId === pf.id ? "Rejecting..." : "Reject"}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Search & Department Filters */}
       <div

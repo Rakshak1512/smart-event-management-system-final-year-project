@@ -12,6 +12,11 @@ export default function ProtectedRoute({ allowedRoles }) {
     return <Navigate to="/login" replace />;
   }
 
+  const approvalStatus = (user.approval_status || "ACTIVE").toUpperCase();
+  if (approvalStatus !== "ACTIVE") {
+    return <Navigate to="/awaiting-approval" replace />;
+  }
+
   const userRole = (user.role || "").toLowerCase();
   const normalizedAllowed = allowedRoles?.map((r) => r.toLowerCase());
 

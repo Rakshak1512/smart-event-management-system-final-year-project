@@ -1,5 +1,6 @@
 import logging
 from typing import List, Optional
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db import firestore_service as db_service
@@ -12,12 +13,24 @@ from app.schemas.assignment_schema import (
     AssignmentStatusUpdate,
     AssignmentUpdate,
 )
-from app.services.email_service import send_faculty_work_assigned_email
+from app.schemas.user_schema import UserOut
+from app.services.email_service import (
+    send_faculty_approved_email,
+    send_faculty_rejected_email,
+    send_faculty_work_assigned_email,
+    send_student_approved_email,
+    send_student_rejected_email,
+)
 
 logger = logging.getLogger("app.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 faculty_task_router = APIRouter(prefix="/api/faculty/tasks", tags=["Faculty Tasks"])
+faculty_approval_router = APIRouter(prefix="/api/faculty", tags=["Faculty Approvals"])
+
+
+class RejectionPayload(BaseModel):
+    reason: Optional[str] = None
 
 
 # ============================================================
@@ -213,3 +226,134 @@ def get_admin_reports_summary(
         "active_assignments": sum(1 for a in all_assignments if a.status in ("pending", "in_progress")),
         "completed_assignments": sum(1 for a in all_assignments if a.status == "completed"),
     }
+
+
+# ============================================================
+# FACULTY ACCOUNT APPROVAL WORKFLOW (ADMIN ONLY)
+# ============================================================
+
+@router.get("/pending-faculty", response_model=List[UserOut])
+def get_pending_faculty_accounts(
+    current_user: User = Depends(require_role(RoleEnum.admin)),
+):
+    """Admin retrieves all faculty registrations awaiting institutional verification."""
+    return db_service.get_pending_faculty()
+
+
+@router.post("/faculty/{faculty_id}/approve", response_model=UserOut)
+def approve_faculty_account(
+    faculty_id: int,
+    current_user: User = Depends(require_role(RoleEnum.admin)),
+):
+    """Admin approves a faculty account, activating dashboard and event management privileges."""
+    fac = db_service.get_user_by_id(faculty_id)
+    if not fac or fac.role != RoleEnum.faculty:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Faculty account not found.")
+
+    updated = db_service.approve_user(faculty_id)
+
+    # In-app notification
+    db_service.create_notification(
+        user_id=faculty_id,
+        title="Account Approved",
+        message=f"Administrator {current_user.name} has approved your faculty credentials. Welcome to EventSphere!",
+        type=NotificationType.general,
+    )
+
+    # Email notification
+    if fac.email:
+        try:
+            send_faculty_approved_email(fac.email, fac.name)
+        except Exception as e:
+            logger.error("[EMAIL ERROR] Could not send faculty approval email to %s: %s", fac.email, e)
+
+    return updated
+
+
+@router.post("/faculty/{faculty_id}/reject", response_model=UserOut)
+def reject_faculty_account(
+    faculty_id: int,
+    payload: Optional[RejectionPayload] = None,
+    current_user: User = Depends(require_role(RoleEnum.admin)),
+):
+    """Admin rejects an unverified faculty registration."""
+    fac = db_service.get_user_by_id(faculty_id)
+    if not fac or fac.role != RoleEnum.faculty:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Faculty account not found.")
+
+    reason = payload.reason if payload else None
+    updated = db_service.reject_user(faculty_id, reason)
+
+    if fac.email:
+        try:
+            send_faculty_rejected_email(fac.email, fac.name, reason)
+        except Exception as e:
+            logger.error("[EMAIL ERROR] Could not send faculty rejection email to %s: %s", fac.email, e)
+
+    return updated
+
+
+# ============================================================
+# STUDENT ACCOUNT APPROVAL WORKFLOW (FACULTY ONLY)
+# ============================================================
+
+@faculty_approval_router.get("/pending-students", response_model=List[UserOut])
+def get_pending_student_accounts(
+    current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
+):
+    """Faculty retrieves all student registrations awaiting departmental approval."""
+    return db_service.get_pending_students()
+
+
+@faculty_approval_router.post("/students/{student_id}/approve", response_model=UserOut)
+def approve_student_account(
+    student_id: int,
+    current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
+):
+    """Faculty approves a student registration, unlocking the student dashboard and ticket registration."""
+    student = db_service.get_user_by_id(student_id)
+    if not student or student.role != RoleEnum.student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student account not found.")
+
+    updated = db_service.approve_user(student_id)
+
+    # In-app notification
+    db_service.create_notification(
+        user_id=student_id,
+        title="Student Portal Unlocked",
+        message=f"Faculty coordinator {current_user.name} has approved your account. You can now register for campus events!",
+        type=NotificationType.general,
+    )
+
+    # Email notification
+    if student.email:
+        try:
+            send_student_approved_email(student.email, student.name)
+        except Exception as e:
+            logger.error("[EMAIL ERROR] Could not send student approval email to %s: %s", student.email, e)
+
+    return updated
+
+
+@faculty_approval_router.post("/students/{student_id}/reject", response_model=UserOut)
+def reject_student_account(
+    student_id: int,
+    payload: Optional[RejectionPayload] = None,
+    current_user: User = Depends(require_role(RoleEnum.faculty, RoleEnum.admin)),
+):
+    """Faculty rejects a student registration."""
+    student = db_service.get_user_by_id(student_id)
+    if not student or student.role != RoleEnum.student:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student account not found.")
+
+    reason = payload.reason if payload else None
+    updated = db_service.reject_user(student_id, reason)
+
+    if student.email:
+        try:
+            send_student_rejected_email(student.email, student.name, reason)
+        except Exception as e:
+            logger.error("[EMAIL ERROR] Could not send student rejection email to %s: %s", student.email, e)
+
+    return updated
+
